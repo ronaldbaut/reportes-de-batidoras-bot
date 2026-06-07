@@ -9,7 +9,6 @@ intents.messages = True
 
 client = discord.Client(intents=intents)
 
-# Estado de las conversaciones por canal
 conversation_state = {}
 
 @client.event
@@ -21,19 +20,19 @@ async def on_message(message):
     if message.author == client.user:
         return
 
-    content = message.content.strip().lower()   # convertimos a minúsculas para que sea más flexible
+    content = message.content.strip().lower()
     channel_id = str(message.channel.id)
 
-    # ================== CANCELAR REPORTE (funciona en todos) ==================
+    # Cancelar reporte (funciona en todos)
     if content in ["cancelar reporte", "cancelar", "cancel"]:
         if channel_id in conversation_state:
             del conversation_state[channel_id]
             await message.channel.send("✅ Reporte cancelado correctamente.")
         else:
-            await message.channel.send("No hay ningún reporte activo en este momento.")
+            await message.channel.send("No hay ningún reporte activo.")
         return
 
-    # ================== COMANDOS PARA INICIAR ==================
+    # Iniciar reportes
     if content == "iniciar reporte de cierre":
         await iniciar_reporte_cierre(message.channel)
     elif content == "reporte de inicio de batidoras":
@@ -43,7 +42,7 @@ async def on_message(message):
     elif content == "reporte de apagado de batidoras":
         await reporte_apagado_batidoras(message.channel)
 
-    # Si hay una conversación activa
+    # Respuestas a preguntas
     elif channel_id in conversation_state:
         await manejar_respuesta(message)
 
@@ -73,7 +72,6 @@ async def manejar_respuesta(message):
 
     await message.channel.send(f"✅ Recibido: {message.content}")
 
-    # Ejemplo de flujo para "Reporte de inicio de batidoras"
     if tipo == "inicio_batidoras":
         if paso == 1:
             state["paso"] = 2
@@ -82,4 +80,10 @@ async def manejar_respuesta(message):
             state["paso"] = 3
             await message.channel.send("3. ¿Aplicaste grasa al piñón?")
         else:
-            await message.channel.send("✅ Reporte de
+            await message.channel.send("✅ Reporte de Inicio de Batidoras completado. ¡Gracias!")
+            del conversation_state[channel_id]
+    else:
+        await message.channel.send("✅ Respuesta guardada.")
+        del conversation_state[channel_id]
+
+client.run(DISCORD_TOKEN)
