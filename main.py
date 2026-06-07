@@ -82,39 +82,48 @@ async def manejar_respuesta(message):
             await message.channel.send("5. ¿A qué hora se comenzaron a alistar los pedidos y a qué hora terminaron?")
         elif paso == 5:
             state["paso"] = 6
-            await message.channel.send("6. Tiempos de proceso - Envasado de bandeja: Hora de inicio y hora de finalización. ¿Qué trabajadores se encargaron?")
+            await message.channel.send("6. ¿A qué hora empezaste y terminaste el envasado de bandejas? ¿Qué trabajadores se encargaron?")
         elif paso == 6:
             state["paso"] = 7
-            await message.channel.send("7. Tiempos de proceso - Envasado de vasitos: Hora de inicio y hora de finalización. ¿Qué trabajadores envasaron?")
+            await message.channel.send("7. ¿A qué hora empezaste y terminaste el envasado de vasitos? ¿Qué trabajadores envasaron?")
         elif paso == 7:
             state["paso"] = 8
-            await message.channel.send("8. Tiempos de limpieza: Hora de inicio y hora de finalización. ¿Qué trabajadores se encargaron?")
+            await message.channel.send("8. ¿A qué hora empezaste y terminaste la limpieza? ¿Qué trabajadores se encargaron?")
         elif paso == 8:
             state["paso"] = 9
-            await message.channel.send("9. ¿Limpiaste los tambores de las batidoras? ¿Retiraste la sal de los cabezotes?")
+            await message.channel.send("9. ¿Limpiaste los tambores de las batidoras y retiraste la sal de los cabezotes?")
         elif paso == 9:
             state["paso"] = 10
-            await message.channel.send("10. Combustible y aceite - Planta azul: Cantidad de gasoil actual y nivel de aceite")
+            await message.channel.send("10. ¿Cuánto gasoil tiene ahora la planta azul y cuál es el nivel de aceite?")
         elif paso == 10:
             state["paso"] = 11
-            await message.channel.send("11. Combustible y aceite - Planta amarilla: Cantidad de gasoil actual y nivel de aceite")
+            await message.channel.send("11. ¿Cuánto gasoil tiene ahora la planta roja y cuál es el nivel de aceite?")
         elif paso == 11:
             state["paso"] = 12
-            await message.channel.send("12. Protocolo de cierre - Motores de congeladores: ¿Todos encendidos? ¿Están bien cerrados? ¿Están calientes?")
+            await message.channel.send("12. ¿Todos los motores de los congeladores están encendidos, bien cerrados y calientes?")
         elif paso == 12:
             state["paso"] = 13
-            await message.channel.send("13. Protocolo de cierre - Puertas: ¿Cerraste con candado las puertas de heladeros, estacionamiento, planta y salida (doble candado)?")
+            await message.channel.send("13. ¿Cerraste con candado las puertas de los heladeros, el estacionamiento, la planta y la salida (con doble candado)?")
         elif paso == 13:
             state["paso"] = 14
-            await message.channel.send("14. Protocolo de cierre - Aire acondicionado: ¿Quedó apagado el aire de producción y el de ventas?")
+            await message.channel.send("14. ¿Quedó apagado el aire acondicionado de producción y el de ventas?")
         elif paso == 14:
             state["paso"] = 15
-            await message.channel.send("15. ¿Pasaste la producción del día completa en la hoja de cálculo correspondiente?")
+            await message.channel.send("15. ¿Quedó registrada la producción del día completa en la hoja de cálculo correspondiente? ¿Quién lo hizo?")
+        elif paso == 15:
+            state["paso"] = 16
+            await message.channel.send("16. ¿Oprimiste el botón rojo del tablero de batidoras?")
+        elif paso == 16:
+            state["paso"] = 17
+            await message.channel.send("17. ¿Dejaron todas las luces de la fábrica apagadas?")
+        elif paso == 17:
+            state["paso"] = 18
+            await message.channel.send("18. ¿Qué cantidad de gasoil hay en el depósito?")
         else:
             await message.channel.send("✅ Reporte de Cierre completado. ¡Gracias!")
             del conversation_state[channel_id]
 
-    # Reportes de batidoras (mantienen los flujos anteriores)
+    # Reportes de batidoras (mantienen sus flujos anteriores)
     elif tipo == "funcionamiento_batidoras":
         if paso <= 5:
             bat = paso
