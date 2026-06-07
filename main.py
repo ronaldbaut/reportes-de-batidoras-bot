@@ -21,17 +21,26 @@ async def on_message(message):
     if message.author == client.user:
         return
 
-    content = message.content.strip()
+    content = message.content.strip().lower()   # convertimos a minúsculas para que sea más flexible
     channel_id = str(message.channel.id)
 
-    # Comandos para iniciar reportes
+    # ================== CANCELAR REPORTE (funciona en todos) ==================
+    if content in ["cancelar reporte", "cancelar", "cancel"]:
+        if channel_id in conversation_state:
+            del conversation_state[channel_id]
+            await message.channel.send("✅ Reporte cancelado correctamente.")
+        else:
+            await message.channel.send("No hay ningún reporte activo en este momento.")
+        return
+
+    # ================== COMANDOS PARA INICIAR ==================
     if content == "iniciar reporte de cierre":
         await iniciar_reporte_cierre(message.channel)
-    elif content == "Reporte de inicio de batidoras":
+    elif content == "reporte de inicio de batidoras":
         await reporte_inicio_batidoras(message.channel)
-    elif content == "Reporte de funcionamiento de batidoras":
+    elif content == "reporte de funcionamiento de batidoras":
         await reporte_funcionamiento_batidoras(message.channel)
-    elif content == "Reporte de apagado de batidoras":
+    elif content == "reporte de apagado de batidoras":
         await reporte_apagado_batidoras(message.channel)
 
     # Si hay una conversación activa
@@ -62,9 +71,9 @@ async def manejar_respuesta(message):
     tipo = state["tipo"]
     paso = state["paso"]
 
-    # Aquí puedes agregar más preguntas según el tipo y paso
     await message.channel.send(f"✅ Recibido: {message.content}")
 
+    # Ejemplo de flujo para "Reporte de inicio de batidoras"
     if tipo == "inicio_batidoras":
         if paso == 1:
             state["paso"] = 2
@@ -73,15 +82,4 @@ async def manejar_respuesta(message):
             state["paso"] = 3
             await message.channel.send("3. ¿Aplicaste grasa al piñón?")
         else:
-            await message.channel.send("✅ Reporte de Inicio de Batidoras completado. Gracias!")
-            del conversation_state[channel_id]
-
-    # (Puedes agregar los flujos completos de los otros reportes aquí)
-    # Por ahora los otros reportes solo avanzan 1 paso. Dime y agrego todos los pasos.
-
-    else:
-        await message.channel.send("✅ Respuesta guardada. Reporte en progreso...")
-        # Temporal: termina la conversación
-        del conversation_state[channel_id]
-
-client.run(DISCORD_TOKEN)
+            await message.channel.send("✅ Reporte de
