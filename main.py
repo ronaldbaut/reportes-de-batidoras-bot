@@ -1,13 +1,7 @@
 import discord
-import google.generativeai as genai
 import os
-from datetime import datetime
 
-# ================== CONFIGURACIÓN ==================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-genai.configure(api_key=GEMINI_API_KEY)
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -15,7 +9,7 @@ intents.messages = True
 
 client = discord.Client(intents=intents)
 
-# Diccionario para guardar el estado de cada conversación por canal
+# Estado de las conversaciones por canal
 conversation_state = {}
 
 @client.event
@@ -30,7 +24,7 @@ async def on_message(message):
     content = message.content.strip()
     channel_id = str(message.channel.id)
 
-    # ================== COMANDOS ==================
+    # Comandos para iniciar reportes
     if content == "iniciar reporte de cierre":
         await iniciar_reporte_cierre(message.channel)
     elif content == "Reporte de inicio de batidoras":
@@ -40,10 +34,11 @@ async def on_message(message):
     elif content == "Reporte de apagado de batidoras":
         await reporte_apagado_batidoras(message.channel)
 
-    # Si ya hay una conversación activa en este canal
+    # Si hay una conversación activa
     elif channel_id in conversation_state:
         await manejar_respuesta(message)
 
+# ================== INICIO DE REPORTES ==================
 async def iniciar_reporte_cierre(channel):
     conversation_state[str(channel.id)] = {"tipo": "cierre", "paso": 1}
     await channel.send("**Reporte de Cierre iniciado.**\n\n1. ¿Qué trabajadores alistaron los pedidos?")
@@ -60,13 +55,33 @@ async def reporte_apagado_batidoras(channel):
     conversation_state[str(channel.id)] = {"tipo": "apagado_batidoras", "paso": 1}
     await channel.send("**Reporte de Apagado de Batidoras iniciado.**\n\n1. ¿Revisaste los dientes del piñón?")
 
+# ================== MANEJO DE RESPUESTAS ==================
 async def manejar_respuesta(message):
     channel_id = str(message.channel.id)
     state = conversation_state[channel_id]
-    # Aquí irían las preguntas siguientes según el tipo y paso
-    # (por ahora solo mostramos que recibió la respuesta)
-    await message.channel.send(f"✅ Recibido: {message.content}\n\nSiguiente pregunta en desarrollo...")
-    # En futuras actualizaciones agregaremos todas las preguntas secuenciales
+    tipo = state["tipo"]
+    paso = state["paso"]
 
-# ================== EJECUCIÓN ==================
+    # Aquí puedes agregar más preguntas según el tipo y paso
+    await message.channel.send(f"✅ Recibido: {message.content}")
+
+    if tipo == "inicio_batidoras":
+        if paso == 1:
+            state["paso"] = 2
+            await message.channel.send("2. ¿Revisaste las chavetas del eje de batido?")
+        elif paso == 2:
+            state["paso"] = 3
+            await message.channel.send("3. ¿Aplicaste grasa al piñón?")
+        else:
+            await message.channel.send("✅ Reporte de Inicio de Batidoras completado. Gracias!")
+            del conversation_state[channel_id]
+
+    # (Puedes agregar los flujos completos de los otros reportes aquí)
+    # Por ahora los otros reportes solo avanzan 1 paso. Dime y agrego todos los pasos.
+
+    else:
+        await message.channel.send("✅ Respuesta guardada. Reporte en progreso...")
+        # Temporal: termina la conversación
+        del conversation_state[channel_id]
+
 client.run(DISCORD_TOKEN)
