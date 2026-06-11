@@ -1,23 +1,86 @@
 import discord
+from discord.ext import commands
 import os
+import traceback
 
+print(">>> Iniciando bot de reportes de cierre...")
+
+# ================== CONFIGURACIÓN ==================
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+
+if not DISCORD_TOKEN:
+    raise RuntimeError("❌ ERROR: Falta la variable de entorno DISCORD_TOKEN")
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.messages = True
 
-client = discord.Client(intents=intents)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 conversation_state = {}
 
-@client.event
-async def on_ready():
-    print(f'✅ Bot conectado como {client.user}')
+# ================== COMANDOS SLASH (para usar con /) ==================
+@bot.tree.command(name="iniciar-reporte-cierre", description="Inicia el Reporte de Cierre diario")
+async def iniciar_reporte_cierre_slash(interaction: discord.Interaction):
+    channel = interaction.channel
+    conversation_state[str(channel.id)] = {"tipo": "cierre", "paso": 1}
+    await interaction.response.send_message(
+        "**Reporte de Cierre iniciado.**\n\n"
+        "1. ¿Qué trabajadores alistaron los pedidos?\n\n"
+        "_Escribe **cancelar** o **cancelar reporte** en cualquier momento para detenerlo._"
+    )
 
-@client.event
+
+@bot.tree.command(name="reporte-inicio-batidoras", description="Inicia el Reporte de Inicio de Batidoras (5 batidoras)")
+async def reporte_inicio_batidoras_slash(interaction: discord.Interaction):
+    channel = interaction.channel
+    conversation_state[str(channel.id)] = {"tipo": "inicio_batidoras", "batidora": 1, "paso": 1}
+    await interaction.response.send_message(
+        "**Reporte de Inicio de Batidoras iniciado.**\n\n"
+        "**Batidora 1**\n"
+        "1. ¿Revisaste la tensión de las correas?\n\n"
+        "_Escribe **cancelar** o **cancelar reporte** en cualquier momento para detenerlo._"
+    )
+
+
+@bot.tree.command(name="reporte-funcionamiento-batidoras", description="Inicia el Reporte de Funcionamiento de Batidoras (5 batidoras)")
+async def reporte_funcionamiento_batidoras_slash(interaction: discord.Interaction):
+    channel = interaction.channel
+    conversation_state[str(channel.id)] = {"tipo": "funcionamiento_batidoras", "batidora": 1, "paso": 1}
+    await interaction.response.send_message(
+        "**Reporte de Funcionamiento de Batidoras iniciado.**\n\n"
+        "**Batidora 1**\n"
+        "1. ¿La temperatura del cabezote está por debajo de 50°? ¿Cuál es la temperatura exacta?\n\n"
+        "_Escribe **cancelar** o **cancelar reporte** en cualquier momento para detenerlo._"
+    )
+
+
+@bot.tree.command(name="reporte-apagado-batidoras", description="Inicia el Reporte de Apagado de Batidoras (5 batidoras)")
+async def reporte_apagado_batidoras_slash(interaction: discord.Interaction):
+    channel = interaction.channel
+    conversation_state[str(channel.id)] = {"tipo": "apagado_batidoras", "batidora": 1, "paso": 1}
+    await interaction.response.send_message(
+        "**Reporte de Apagado de Batidoras iniciado.**\n\n"
+        "**Batidora 1**\n"
+        "1. ¿Revisaste los dientes del piñón? (envía video)\n\n"
+        "_Escribe **cancelar** o **cancelar reporte** en cualquier momento para detenerlo._"
+    )
+
+
+@bot.event
+async def on_ready():
+    print(f'✅ Bot conectado como {bot.user}')
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ {len(synced)} slash commands sincronizados correctamente")
+    except Exception as e:
+        print(f"❌ Error al sincronizar comandos: {e}")
+        traceback.print_exc()
+
+
+@bot.event
 async def on_message(message):
-    if message.author == client.user:
+    if message.author == bot.user:
         return
 
     content = message.content.strip().lower()
@@ -41,22 +104,27 @@ async def on_message(message):
     elif channel_id in conversation_state:
         await manejar_respuesta(message)
 
-# ================== INICIO DE REPORTES ==================
+
+# ================== INICIO DE REPORTES (también usados por comandos de texto antiguos) ==================
 async def iniciar_reporte_cierre(channel):
     conversation_state[str(channel.id)] = {"tipo": "cierre", "paso": 1}
     await channel.send("**Reporte de Cierre iniciado.**\n\n1. ¿Qué trabajadores alistaron los pedidos?")
+
 
 async def reporte_inicio_batidoras(channel):
     conversation_state[str(channel.id)] = {"tipo": "inicio_batidoras", "batidora": 1, "paso": 1}
     await channel.send("**Reporte de Inicio de Batidoras iniciado.**\n\n**Batidora 1**\n1. ¿Revisaste la tensión de las correas?")
 
+
 async def reporte_funcionamiento_batidoras(channel):
     conversation_state[str(channel.id)] = {"tipo": "funcionamiento_batidoras", "batidora": 1, "paso": 1}
     await channel.send("**Reporte de Funcionamiento de Batidoras iniciado.**\n\n**Batidora 1**\n1. ¿La temperatura del cabezote está por debajo de 50°? ¿Cuál es la temperatura exacta?")
 
+
 async def reporte_apagado_batidoras(channel):
     conversation_state[str(channel.id)] = {"tipo": "apagado_batidoras", "batidora": 1, "paso": 1}
     await channel.send("**Reporte de Apagado de Batidoras iniciado.**\n\n**Batidora 1**\n1. ¿Revisaste los dientes del piñón? (envía video)")
+
 
 # ================== MANEJO DE RESPUESTAS ==================
 async def manejar_respuesta(message):
@@ -203,4 +271,6 @@ async def manejar_respuesta(message):
                 await message.channel.send("✅ Reporte de Apagado de Batidoras completado. ¡Gracias!")
                 del conversation_state[channel_id]
 
-client.run(DISCORD_TOKEN)
+
+# ================== INICIO DEL BOT ==================
+bot.run(DISCORD_TOKEN)
