@@ -31,14 +31,14 @@ async def iniciar_reporte_cierre_slash(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="reporte-inicio-batidoras", description="Inicia el Reporte de Inicio de Batidoras (una pregunta por batidora)")
+@bot.tree.command(name="reporte-inicio-batidoras", description="Inicia el Reporte de Inicio de Batidoras (pregunta + video por batidora)")
 async def reporte_inicio_batidoras_slash(interaction: discord.Interaction):
     channel = interaction.channel
-    conversation_state[str(channel.id)] = {"tipo": "inicio_batidoras", "batidora": 1}
+    conversation_state[str(channel.id)] = {"tipo": "inicio_batidoras", "batidora": 1, "paso": 1}
     await interaction.response.send_message(
         "**Reporte de Inicio de Batidoras iniciado.**\n\n"
         "**Batidora 1**\n\n"
-        "Revisa lo siguiente antes de encender: (tensión de correas, chavetas del eje de batido, engrase del piñón, protección del rodamiento 6206, nivel óptimo de agua sal, ajuste del piñón sin juego, dientes completos del piñón, movimiento del tambor derecha-izquierda y arriba-abajo). ¿Todo está en buen estado? (envía video del piñón si aplica)\n\n"
+        "Revisa lo siguiente antes de encender: (tensión de correas, chavetas del eje de batido, engrase del piñón, protección del rodamiento 6206, nivel óptimo de agua sal, ajuste del piñón sin juego, dientes completos del piñón, movimiento del tambor derecha-izquierda y arriba-abajo). ¿Todo está en buen estado?\n\n"
         "_Escribe **cancelar** o **cancelar reporte** en cualquier momento para detenerlo._"
     )
 
@@ -55,14 +55,14 @@ async def reporte_funcionamiento_batidoras_slash(interaction: discord.Interactio
     )
 
 
-@bot.tree.command(name="reporte-apagado-batidoras", description="Inicia el Reporte de Apagado de Batidoras (una pregunta por batidora)")
+@bot.tree.command(name="reporte-apagado-batidoras", description="Inicia el Reporte de Apagado de Batidoras (pregunta + video por batidora)")
 async def reporte_apagado_batidoras_slash(interaction: discord.Interaction):
     channel = interaction.channel
-    conversation_state[str(channel.id)] = {"tipo": "apagado_batidoras", "batidora": 1}
+    conversation_state[str(channel.id)] = {"tipo": "apagado_batidoras", "batidora": 1, "paso": 1}
     await interaction.response.send_message(
         "**Reporte de Apagado de Batidoras iniciado.**\n\n"
         "**Batidora 1**\n\n"
-        "Al apagar confirma: (dientes del piñón con video, ajuste del piñón, subir cuchilla y la protección del rodamiento, movimiento del eje del tambor en ambos sentidos, hora de encendido y apagado, cantidad de colores batidos, tiempo promedio de las batidas trisabor/gourmet/clásica/sundae). Reporta el estado y los datos.\n\n"
+        "Al apagar confirma: (dientes del piñón, ajuste del piñón, subir cuchilla y la protección del rodamiento, movimiento del eje del tambor en ambos sentidos, hora de encendido y apagado, cantidad de colores batidos, tiempo promedio de las batidas trisabor/gourmet/clásica/sundae). Reporta el estado y los datos.\n\n"
         "_Escribe **cancelar** o **cancelar reporte** en cualquier momento para detenerlo._"
     )
 
@@ -112,11 +112,11 @@ async def iniciar_reporte_cierre(channel):
 
 
 async def reporte_inicio_batidoras(channel):
-    conversation_state[str(channel.id)] = {"tipo": "inicio_batidoras", "batidora": 1}
+    conversation_state[str(channel.id)] = {"tipo": "inicio_batidoras", "batidora": 1, "paso": 1}
     await channel.send(
         "**Reporte de Inicio de Batidoras iniciado.**\n\n"
         "**Batidora 1**\n\n"
-        "Revisa lo siguiente antes de encender: (tensión de correas, chavetas del eje de batido, engrase del piñón, protección del rodamiento 6206, nivel óptimo de agua sal, ajuste del piñón sin juego, dientes completos del piñón, movimiento del tambor derecha-izquierda y arriba-abajo). ¿Todo está en buen estado? (envía video del piñón si aplica)"
+        "Revisa lo siguiente antes de encender: (tensión de correas, chavetas del eje de batido, engrase del piñón, protección del rodamiento 6206, nivel óptimo de agua sal, ajuste del piñón sin juego, dientes completos del piñón, movimiento del tambor derecha-izquierda y arriba-abajo). ¿Todo está en buen estado?"
     )
 
 
@@ -130,11 +130,11 @@ async def reporte_funcionamiento_batidoras(channel):
 
 
 async def reporte_apagado_batidoras(channel):
-    conversation_state[str(channel.id)] = {"tipo": "apagado_batidoras", "batidora": 1}
+    conversation_state[str(channel.id)] = {"tipo": "apagado_batidoras", "batidora": 1, "paso": 1}
     await channel.send(
         "**Reporte de Apagado de Batidoras iniciado.**\n\n"
         "**Batidora 1**\n\n"
-        "Al apagar confirma: (dientes del piñón con video, ajuste del piñón, subir cuchilla y la protección del rodamiento, movimiento del eje del tambor en ambos sentidos, hora de encendido y apagado, cantidad de colores batidos, tiempo promedio de las batidas trisabor/gourmet/clásica/sundae). Reporta el estado y los datos."
+        "Al apagar confirma: (dientes del piñón, ajuste del piñón, subir cuchilla y la protección del rodamiento, movimiento del eje del tambor en ambos sentidos, hora de encendido y apagado, cantidad de colores batidos, tiempo promedio de las batidas trisabor/gourmet/clásica/sundae). Reporta el estado y los datos."
     )
 
 
@@ -206,20 +206,30 @@ async def manejar_respuesta(message):
             await message.channel.send("✅ Reporte de Cierre completado. ¡Gracias!")
             del conversation_state[channel_id]
 
-    # ================== REPORTES DE BATIDORAS - UNA SOLA PREGUNTA POR BATIDORA ==================
+    # ================== INICIO DE BATIDORAS: Pregunta + Video por batidora ==================
     elif tipo == "inicio_batidoras":
         bat = state.get("batidora", 1)
-        if bat < 5:
-            next_bat = bat + 1
-            state["batidora"] = next_bat
-            await message.channel.send(
-                f"\n**Batidora {next_bat}**\n\n"
-                "Revisa lo siguiente antes de encender: (tensión de correas, chavetas del eje de batido, engrase del piñón, protección del rodamiento 6206, nivel óptimo de agua sal, ajuste del piñón sin juego, dientes completos del piñón, movimiento del tambor derecha-izquierda y arriba-abajo). ¿Todo está en buen estado? (envía video del piñón si aplica)"
-            )
-        else:
-            await message.channel.send("✅ Reporte de Inicio de Batidoras completado. ¡Gracias!")
-            del conversation_state[channel_id]
+        paso = state.get("paso", 1)
 
+        if paso == 1:
+            # Después de la respuesta de la pregunta, pedimos el video
+            state["paso"] = 2
+            await message.channel.send(f"Por favor envía un video del piñón de la batidora {bat} (muestra los dientes y el estado general).")
+        elif paso == 2:
+            # Después del video, pasamos a la siguiente batidora
+            if bat < 5:
+                next_bat = bat + 1
+                state["batidora"] = next_bat
+                state["paso"] = 1
+                await message.channel.send(
+                    f"\n**Batidora {next_bat}**\n\n"
+                    "Revisa lo siguiente antes de encender: (tensión de correas, chavetas del eje de batido, engrase del piñón, protección del rodamiento 6206, nivel óptimo de agua sal, ajuste del piñón sin juego, dientes completos del piñón, movimiento del tambor derecha-izquierda y arriba-abajo). ¿Todo está en buen estado?"
+                )
+            else:
+                await message.channel.send("✅ Reporte de Inicio de Batidoras completado. ¡Gracias!")
+                del conversation_state[channel_id]
+
+    # Funcionamiento se mantiene simple (sin video)
     elif tipo == "funcionamiento_batidoras":
         bat = state.get("batidora", 1)
         if bat < 5:
@@ -233,18 +243,28 @@ async def manejar_respuesta(message):
             await message.channel.send("✅ Reporte de Funcionamiento de Batidoras completado. ¡Gracias!")
             del conversation_state[channel_id]
 
+    # ================== APAGADO DE BATIDORAS: Pregunta + Video por batidora ==================
     elif tipo == "apagado_batidoras":
         bat = state.get("batidora", 1)
-        if bat < 5:
-            next_bat = bat + 1
-            state["batidora"] = next_bat
-            await message.channel.send(
-                f"\n**Batidora {next_bat}**\n\n"
-                "Al apagar confirma: (dientes del piñón con video, ajuste del piñón, subir cuchilla y la protección del rodamiento, movimiento del eje del tambor en ambos sentidos, hora de encendido y apagado, cantidad de colores batidos, tiempo promedio de las batidas trisabor/gourmet/clásica/sundae). Reporta el estado y los datos."
-            )
-        else:
-            await message.channel.send("✅ Reporte de Apagado de Batidoras completado. ¡Gracias!")
-            del conversation_state[channel_id]
+        paso = state.get("paso", 1)
+
+        if paso == 1:
+            # Después de la respuesta de la pregunta, pedimos el video
+            state["paso"] = 2
+            await message.channel.send(f"Por favor envía un video del piñón de la batidora {bat} (muestra los dientes y el estado general).")
+        elif paso == 2:
+            # Después del video, pasamos a la siguiente batidora
+            if bat < 5:
+                next_bat = bat + 1
+                state["batidora"] = next_bat
+                state["paso"] = 1
+                await message.channel.send(
+                    f"\n**Batidora {next_bat}**\n\n"
+                    "Al apagar confirma: (dientes del piñón, ajuste del piñón, subir cuchilla y la protección del rodamiento, movimiento del eje del tambor en ambos sentidos, hora de encendido y apagado, cantidad de colores batidos, tiempo promedio de las batidas trisabor/gourmet/clásica/sundae). Reporta el estado y los datos."
+                )
+            else:
+                await message.channel.send("✅ Reporte de Apagado de Batidoras completado. ¡Gracias!")
+                del conversation_state[channel_id]
 
 
 # ================== INICIO DEL BOT ==================
