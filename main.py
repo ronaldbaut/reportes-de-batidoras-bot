@@ -31,38 +31,38 @@ async def iniciar_reporte_cierre_slash(interaction: discord.Interaction):
     )
 
 
-@bot.tree.command(name="reporte-inicio-batidoras", description="Inicia el Reporte de Inicio de Batidoras (5 batidoras)")
+@bot.tree.command(name="reporte-inicio-batidoras", description="Inicia el Reporte de Inicio de Batidoras (una pregunta por batidora)")
 async def reporte_inicio_batidoras_slash(interaction: discord.Interaction):
     channel = interaction.channel
-    conversation_state[str(channel.id)] = {"tipo": "inicio_batidoras", "batidora": 1, "paso": 1}
+    conversation_state[str(channel.id)] = {"tipo": "inicio_batidoras", "batidora": 1}
     await interaction.response.send_message(
         "**Reporte de Inicio de Batidoras iniciado.**\n\n"
-        "**Batidora 1**\n"
-        "1. ¿Revisaste la tensión de las correas?\n\n"
+        "**Batidora 1**\n\n"
+        "Revisa lo siguiente antes de encender: (tensión de correas, chavetas del eje de batido, engrase del piñón, protección del rodamiento 6206, nivel óptimo de agua sal, ajuste del piñón sin juego, dientes completos del piñón, movimiento del tambor derecha-izquierda y arriba-abajo). ¿Todo está en buen estado? (envía video del piñón si aplica)\n\n"
         "_Escribe **cancelar** o **cancelar reporte** en cualquier momento para detenerlo._"
     )
 
 
-@bot.tree.command(name="reporte-funcionamiento-batidoras", description="Inicia el Reporte de Funcionamiento de Batidoras (5 batidoras)")
+@bot.tree.command(name="reporte-funcionamiento-batidoras", description="Inicia el Reporte de Funcionamiento de Batidoras (una pregunta por batidora)")
 async def reporte_funcionamiento_batidoras_slash(interaction: discord.Interaction):
     channel = interaction.channel
-    conversation_state[str(channel.id)] = {"tipo": "funcionamiento_batidoras", "batidora": 1, "paso": 1}
+    conversation_state[str(channel.id)] = {"tipo": "funcionamiento_batidoras", "batidora": 1}
     await interaction.response.send_message(
         "**Reporte de Funcionamiento de Batidoras iniciado.**\n\n"
-        "**Batidora 1**\n"
-        "1. ¿La temperatura del cabezote está por debajo de 50°? ¿Cuál es la temperatura exacta?\n\n"
+        "**Batidora 1**\n\n"
+        "Verifica durante el funcionamiento: (temperatura del cabezote por debajo de 50° y temperatura exacta actual, si está raspando correctamente la mezcla). ¿Cuál es la temperatura del cabezote y está raspando bien?\n\n"
         "_Escribe **cancelar** o **cancelar reporte** en cualquier momento para detenerlo._"
     )
 
 
-@bot.tree.command(name="reporte-apagado-batidoras", description="Inicia el Reporte de Apagado de Batidoras (5 batidoras)")
+@bot.tree.command(name="reporte-apagado-batidoras", description="Inicia el Reporte de Apagado de Batidoras (una pregunta por batidora)")
 async def reporte_apagado_batidoras_slash(interaction: discord.Interaction):
     channel = interaction.channel
-    conversation_state[str(channel.id)] = {"tipo": "apagado_batidoras", "batidora": 1, "paso": 1}
+    conversation_state[str(channel.id)] = {"tipo": "apagado_batidoras", "batidora": 1}
     await interaction.response.send_message(
         "**Reporte de Apagado de Batidoras iniciado.**\n\n"
-        "**Batidora 1**\n"
-        "1. ¿Revisaste los dientes del piñón? (envía video)\n\n"
+        "**Batidora 1**\n\n"
+        "Al apagar confirma: (dientes del piñón con video, ajuste del piñón, subir cuchilla y la protección del rodamiento, movimiento del eje del tambor en ambos sentidos, hora de encendido y apagado, cantidad de colores batidos, tiempo promedio de las batidas trisabor/gourmet/clásica/sundae). Reporta el estado y los datos.\n\n"
         "_Escribe **cancelar** o **cancelar reporte** en cualquier momento para detenerlo._"
     )
 
@@ -105,25 +105,37 @@ async def on_message(message):
         await manejar_respuesta(message)
 
 
-# ================== INICIO DE REPORTES (también usados por comandos de texto antiguos) ==================
+# ================== INICIO DE REPORTES (usados por comandos de texto) ==================
 async def iniciar_reporte_cierre(channel):
     conversation_state[str(channel.id)] = {"tipo": "cierre", "paso": 1}
     await channel.send("**Reporte de Cierre iniciado.**\n\n1. ¿Qué trabajadores alistaron los pedidos?")
 
 
 async def reporte_inicio_batidoras(channel):
-    conversation_state[str(channel.id)] = {"tipo": "inicio_batidoras", "batidora": 1, "paso": 1}
-    await channel.send("**Reporte de Inicio de Batidoras iniciado.**\n\n**Batidora 1**\n1. ¿Revisaste la tensión de las correas?")
+    conversation_state[str(channel.id)] = {"tipo": "inicio_batidoras", "batidora": 1}
+    await channel.send(
+        "**Reporte de Inicio de Batidoras iniciado.**\n\n"
+        "**Batidora 1**\n\n"
+        "Revisa lo siguiente antes de encender: (tensión de correas, chavetas del eje de batido, engrase del piñón, protección del rodamiento 6206, nivel óptimo de agua sal, ajuste del piñón sin juego, dientes completos del piñón, movimiento del tambor derecha-izquierda y arriba-abajo). ¿Todo está en buen estado? (envía video del piñón si aplica)"
+    )
 
 
 async def reporte_funcionamiento_batidoras(channel):
-    conversation_state[str(channel.id)] = {"tipo": "funcionamiento_batidoras", "batidora": 1, "paso": 1}
-    await channel.send("**Reporte de Funcionamiento de Batidoras iniciado.**\n\n**Batidora 1**\n1. ¿La temperatura del cabezote está por debajo de 50°? ¿Cuál es la temperatura exacta?")
+    conversation_state[str(channel.id)] = {"tipo": "funcionamiento_batidoras", "batidora": 1}
+    await channel.send(
+        "**Reporte de Funcionamiento de Batidoras iniciado.**\n\n"
+        "**Batidora 1**\n\n"
+        "Verifica durante el funcionamiento: (temperatura del cabezote por debajo de 50° y temperatura exacta actual, si está raspando correctamente la mezcla). ¿Cuál es la temperatura del cabezote y está raspando bien?"
+    )
 
 
 async def reporte_apagado_batidoras(channel):
-    conversation_state[str(channel.id)] = {"tipo": "apagado_batidoras", "batidora": 1, "paso": 1}
-    await channel.send("**Reporte de Apagado de Batidoras iniciado.**\n\n**Batidora 1**\n1. ¿Revisaste los dientes del piñón? (envía video)")
+    conversation_state[str(channel.id)] = {"tipo": "apagado_batidoras", "batidora": 1}
+    await channel.send(
+        "**Reporte de Apagado de Batidoras iniciado.**\n\n"
+        "**Batidora 1**\n\n"
+        "Al apagar confirma: (dientes del piñón con video, ajuste del piñón, subir cuchilla y la protección del rodamiento, movimiento del eje del tambor en ambos sentidos, hora de encendido y apagado, cantidad de colores batidos, tiempo promedio de las batidas trisabor/gourmet/clásica/sundae). Reporta el estado y los datos."
+    )
 
 
 # ================== MANEJO DE RESPUESTAS ==================
@@ -131,12 +143,11 @@ async def manejar_respuesta(message):
     channel_id = str(message.channel.id)
     state = conversation_state[channel_id]
     tipo = state["tipo"]
-    paso = state["paso"]
-    bat = state.get("batidora", 1)
 
     await message.channel.send(f"✅ Recibido: {message.content}")
 
     if tipo == "cierre":
+        paso = state["paso"]
         if paso == 1:
             state["paso"] = 2
             await message.channel.send("2. ¿A qué clientes pertenecen los pedidos que se alistaron?")
@@ -154,122 +165,86 @@ async def manejar_respuesta(message):
             await message.channel.send("6. ¿A qué hora empezaste y terminaste el envasado de bandejas? ¿Qué trabajadores se encargaron?")
         elif paso == 6:
             state["paso"] = 7
-            await message.channel.send("7. ¿A qué hora empezaste y terminaste el envasado de vasitos? ¿Qué trabajadores envasaron?")
+            await message.channel.send("7. ¿A qué hora empezaste y terminaste el envasado de vasitos? ¿Qué trabajadores se encargaron del envasado de vasitos?")
         elif paso == 7:
             state["paso"] = 8
-            await message.channel.send("8. ¿A qué hora empezaste y terminaste la limpieza? ¿Qué trabajadores se encargaron?")
+            await message.channel.send("8. ¿Cuántos vasitos se envasaron en total hoy?")
         elif paso == 8:
             state["paso"] = 9
-            await message.channel.send("9. ¿Limpiaste los tambores de las batidoras y retiraste la sal de los cabezotes?")
+            await message.channel.send("9. ¿A qué hora empezaste y terminaste la limpieza? ¿Qué trabajadores se encargaron?")
         elif paso == 9:
             state["paso"] = 10
-            await message.channel.send("10. ¿Cuánto gasoil tiene ahora la planta azul y cuál es el nivel de aceite?")
+            await message.channel.send("10. ¿Limpiaste los tambores de las batidoras y retiraste la sal de los cabezotes?")
         elif paso == 10:
             state["paso"] = 11
-            await message.channel.send("11. ¿Cuánto gasoil tiene ahora la planta roja y cuál es el nivel de aceite?")
+            await message.channel.send("11. ¿Cuánto gasoil tiene ahora la planta azul y cuál es el nivel de aceite?")
         elif paso == 11:
             state["paso"] = 12
-            await message.channel.send("12. ¿Todos los motores de los congeladores están encendidos, bien cerrados y calientes?")
+            await message.channel.send("12. ¿Cuánto gasoil tiene ahora la planta roja y cuál es el nivel de aceite?")
         elif paso == 12:
             state["paso"] = 13
-            await message.channel.send("13. ¿Cerraste con candado las puertas de los heladeros, el estacionamiento, la planta y la salida (con doble candado)?")
+            await message.channel.send("13. ¿Todos los motores de los congeladores están encendidos, bien cerrados y calientes?")
         elif paso == 13:
             state["paso"] = 14
-            await message.channel.send("14. ¿Quedó apagado el aire acondicionado de producción y el de ventas?")
+            await message.channel.send("14. ¿Cerraste con candado las puertas de los heladeros, el estacionamiento, la planta y la salida (con doble candado)?")
         elif paso == 14:
             state["paso"] = 15
-            await message.channel.send("15. ¿Quedó registrada la producción del día completa en la hoja de cálculo correspondiente? ¿Quién lo hizo?")
+            await message.channel.send("15. ¿Quedó apagado el aire acondicionado de producción y el de ventas?")
         elif paso == 15:
             state["paso"] = 16
-            await message.channel.send("16. ¿Oprimiste el botón rojo del tablero de batidoras?")
+            await message.channel.send("16. ¿Quedó registrada la producción del día completa en la hoja de cálculo correspondiente? ¿Quién lo hizo?")
         elif paso == 16:
             state["paso"] = 17
-            await message.channel.send("17. ¿Dejaron todas las luces de la fábrica apagadas?")
+            await message.channel.send("17. ¿Oprimiste el botón rojo del tablero de batidoras?")
         elif paso == 17:
             state["paso"] = 18
-            await message.channel.send("18. ¿Qué cantidad de gasoil hay en el depósito?")
+            await message.channel.send("18. ¿Dejaron todas las luces de la fábrica apagadas?")
+        elif paso == 18:
+            state["paso"] = 19
+            await message.channel.send("19. ¿Qué cantidad de gasoil hay en el depósito?")
         else:
             await message.channel.send("✅ Reporte de Cierre completado. ¡Gracias!")
             del conversation_state[channel_id]
 
-    # Reportes de batidoras (agrupados por batidora)
+    # ================== REPORTES DE BATIDORAS - UNA SOLA PREGUNTA POR BATIDORA ==================
     elif tipo == "inicio_batidoras":
-        if paso == 1:
-            state["paso"] = 2
-            await message.channel.send(f"2. ¿Revisaste las chavetas del eje de batido de la batidora {bat}?")
-        elif paso == 2:
-            state["paso"] = 3
-            await message.channel.send(f"3. ¿Está adecuadamente engrasado el piñón de la batidora {bat}?")
-        elif paso == 3:
-            state["paso"] = 4
-            await message.channel.send(f"4. ¿Bajaste la protección del rodamiento 6206 de la batidora {bat}?")
-        elif paso == 4:
-            state["paso"] = 5
-            await message.channel.send(f"5. ¿Oíste algún sonido extraño al empezar la batidora {bat}?")
-        elif paso == 5:
-            state["paso"] = 6
-            await message.channel.send(f"6. ¿El nivel de agua sal es óptimo en la batidora {bat}?")
-        elif paso == 6:
-            state["paso"] = 7
-            await message.channel.send(f"7. ¿Se encuentra ajustado el piñón de la batidora {bat}? ¿Tiene algún movimiento o juego?")
-        elif paso == 7:
-            state["paso"] = 8
-            await message.channel.send(f"8. ¿Están completos los dientes del piñón de la batidora {bat}? (envía video)")
-        elif paso == 8:
-            state["paso"] = 9
-            await message.channel.send(f"9. ¿Existe movimiento del tambor de derecha a izquierda en la batidora {bat}?")
-        elif paso == 9:
-            state["paso"] = 10
-            await message.channel.send(f"10. ¿Existe movimiento del tambor de arriba a abajo en la batidora {bat}?")
+        bat = state.get("batidora", 1)
+        if bat < 5:
+            next_bat = bat + 1
+            state["batidora"] = next_bat
+            await message.channel.send(
+                f"\n**Batidora {next_bat}**\n\n"
+                "Revisa lo siguiente antes de encender: (tensión de correas, chavetas del eje de batido, engrase del piñón, protección del rodamiento 6206, nivel óptimo de agua sal, ajuste del piñón sin juego, dientes completos del piñón, movimiento del tambor derecha-izquierda y arriba-abajo). ¿Todo está en buen estado? (envía video del piñón si aplica)"
+            )
         else:
-            if bat < 5:
-                state["batidora"] = bat + 1
-                state["paso"] = 1
-                await message.channel.send(f"\n**Batidora {bat + 1}**")
-                await message.channel.send("1. ¿Revisaste la tensión de las correas?")
-            else:
-                await message.channel.send("✅ Reporte de Inicio de Batidoras completado. ¡Gracias!")
-                del conversation_state[channel_id]
+            await message.channel.send("✅ Reporte de Inicio de Batidoras completado. ¡Gracias!")
+            del conversation_state[channel_id]
 
     elif tipo == "funcionamiento_batidoras":
-        if paso == 1:
-            state["paso"] = 2
-            await message.channel.send(f"2. ¿Está raspando correctamente la batidora {bat}?")
+        bat = state.get("batidora", 1)
+        if bat < 5:
+            next_bat = bat + 1
+            state["batidora"] = next_bat
+            await message.channel.send(
+                f"\n**Batidora {next_bat}**\n\n"
+                "Verifica durante el funcionamiento: (temperatura del cabezote por debajo de 50° y temperatura exacta actual, si está raspando correctamente la mezcla). ¿Cuál es la temperatura del cabezote y está raspando bien?"
+            )
         else:
-            if bat < 5:
-                state["batidora"] = bat + 1
-                state["paso"] = 1
-                await message.channel.send(f"\n**Batidora {bat + 1}**")
-                await message.channel.send("1. ¿La temperatura del cabezote está por debajo de 50°? ¿Cuál es la temperatura exacta?")
-            else:
-                await message.channel.send("✅ Reporte de Funcionamiento de Batidoras completado. ¡Gracias!")
-                del conversation_state[channel_id]
+            await message.channel.send("✅ Reporte de Funcionamiento de Batidoras completado. ¡Gracias!")
+            del conversation_state[channel_id]
 
     elif tipo == "apagado_batidoras":
-        if paso == 1:
-            state["paso"] = 2
-            await message.channel.send(f"2. ¿Revisaste el ajuste del piñón de la batidora {bat}?")
-        elif paso == 2:
-            state["paso"] = 3
-            await message.channel.send(f"3. ¿Subiste la cuchilla y la protección del rodamiento de la batidora {bat}?")
-        elif paso == 3:
-            state["paso"] = 4
-            await message.channel.send(f"4. ¿Revisaste el movimiento en ambos sentidos del eje del tambor de la batidora {bat}?")
-        elif paso == 4:
-            state["paso"] = 5
-            await message.channel.send(f"5. ¿A qué hora se encendió la batidora {bat}? ¿A qué hora se apagó? ¿Cuántas colores se batieron?")
-        elif paso == 5:
-            state["paso"] = 6
-            await message.channel.send(f"6. ¿En la batidora {bat}, cuánto demoró en promedio las batidas trisabor, gourmet, clásica y sundae?")
+        bat = state.get("batidora", 1)
+        if bat < 5:
+            next_bat = bat + 1
+            state["batidora"] = next_bat
+            await message.channel.send(
+                f"\n**Batidora {next_bat}**\n\n"
+                "Al apagar confirma: (dientes del piñón con video, ajuste del piñón, subir cuchilla y la protección del rodamiento, movimiento del eje del tambor en ambos sentidos, hora de encendido y apagado, cantidad de colores batidos, tiempo promedio de las batidas trisabor/gourmet/clásica/sundae). Reporta el estado y los datos."
+            )
         else:
-            if bat < 5:
-                state["batidora"] = bat + 1
-                state["paso"] = 1
-                await message.channel.send(f"\n**Batidora {bat + 1}**")
-                await message.channel.send("1. ¿Revisaste los dientes del piñón? (envía video)")
-            else:
-                await message.channel.send("✅ Reporte de Apagado de Batidoras completado. ¡Gracias!")
-                del conversation_state[channel_id]
+            await message.channel.send("✅ Reporte de Apagado de Batidoras completado. ¡Gracias!")
+            del conversation_state[channel_id]
 
 
 # ================== INICIO DEL BOT ==================
