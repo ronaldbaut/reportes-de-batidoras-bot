@@ -74,17 +74,18 @@ async def on_message(message):
     content = message.content.strip().lower()
     channel_id = str(message.channel.id)
 
-    if content in ["cancelar", "cancelar reporte"]:
+    # === CANCELACIÓN MEJORADA (más flexible) ===
+    if "cancelar" in content:
         if channel_id in conversation_state:
             del conversation_state[channel_id]
             await message.channel.send("✅ Reporte cancelado.")
         return
 
-    if content == "reporte de encendido de batidoras":
+    if content in ["reporte de encendido de batidoras", "iniciar reporte de encendido de batidoras"]:
         await reporte_encendido_batidoras(message.channel)
-    elif content == "reporte de funcionamiento de batidoras":
+    elif content in ["reporte de funcionamiento de batidoras", "iniciar reporte de funcionamiento de batidoras"]:
         await reporte_funcionamiento_batidoras(message.channel)
-    elif content == "reporte de apagado de batidoras":
+    elif content in ["reporte de apagado de batidoras", "iniciar reporte de apagado de batidoras"]:
         await reporte_apagado_batidoras(message.channel)
 
     elif channel_id in conversation_state:
