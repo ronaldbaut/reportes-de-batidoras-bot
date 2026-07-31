@@ -18,7 +18,6 @@ intents.messages = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Cliente de xAI (Grok)
 client = OpenAI(
     api_key=os.getenv("XAI_API_KEY"),
     base_url="https://api.x.ai/v1"
@@ -122,23 +121,23 @@ async def reporte_apagado_batidoras(channel):
 # ================== FUNCIÓN QUE CONSULTA A GROK ==================
 async def consultar_grok(estado_actual: dict, mensaje_usuario: str) -> dict:
     system_prompt = """
-Eres un asistente experto que controla el flujo de reportes de batidoras de una fábrica de helados.
-Tu trabajo es analizar la respuesta del trabajador y decidir qué hacer a continuación.
+Eres un supervisor estricto de reportes de batidoras en una fábrica de helados.
 
-Debes responder ÚNICAMENTE con un JSON válido con esta estructura exacta:
+Debes responder ÚNICAMENTE con un JSON válido con esta estructura:
 
 {
   "respuesta_valida": true o false,
   "es_negativa": true o false,
   "accion": "avanzar" | "pedir_aclaracion" | "saltar_batidora" | "completar",
-  "mensaje": "el texto exacto que el bot debe enviar al canal"
+  "mensaje": null o "texto"
 }
 
 Reglas:
-- Si la respuesta es muy corta, vacía, irrelevante o no responde a lo que se preguntó → respuesta_valida = false y accion = "pedir_aclaracion"
-- Si claramente indica problema / no funciona / mal estado → es_negativa = true
-- Sé estricto pero justo. No avances si la respuesta es ambigua.
-- El campo "mensaje" debe ser claro, directo y en español.
+- Si la respuesta del trabajador es incompleta, corta o no responde exactamente lo que se preguntó → respuesta_valida = false
+- Cuando respuesta_valida sea false, el campo "mensaje" debe ser un regaño directo y claro (ejemplo: "No me estás diciendo la temperatura exacta ni si está raspando bien. Responde completo.")
+- Sé firme y directo, no amable ni educado de más.
+- Si la respuesta es válida, pon "mensaje": null
+- Sé estricto.
 """
 
     user_content = f"""
@@ -156,7 +155,7 @@ Mensaje del trabajador:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content}
             ],
-            temperature=0.1,
+            temperature=0.2,
             response_format={"type": "json_object"}
         )
         return json.loads(response.choices[0].message.content)
@@ -169,7 +168,7 @@ Mensaje del trabajador:
             "mensaje": None
         }
 
-# ================== MANEJO DE RESPUESTAS (CON GROK) ==================
+# ================== MANEJO DE RESPUESTAS ==================
 async def manejar_respuesta(message):
     channel_id = str(message.channel.id)
     state = conversation_state[channel_id]
@@ -182,24 +181,22 @@ async def manejar_respuesta(message):
 
     decision = await consultar_grok(state, message.content)
 
+    # Si la respuesta no es válida → regaño y paramos
     if not decision.get("respuesta_valida", True):
-        mensaje = decision.get("mensaje") or "No entendí bien tu respuesta. ¿Puedes ser más específico por favor?"
+        mensaje = decision.get("mensaje") or "Tu respuesta está incompleta. Responde bien lo que se te preguntó."
         await message.channel.send(mensaje)
         return
 
-    if decision.get("mensaje"):
-        await message.channel.send(decision["mensaje"])
-
+    # ===== Respuesta válida =====
     if tipo == "encendido_batidoras":
         if not state.get("hora_recibida", False):
             state["hora_recibida"] = True
             state["batidora"] = 1
             state["paso"] = 1
-            if not decision.get("mensaje"):
-                await message.channel.send(
-                    "**Batidora 1**\n\n"
-                    "Revisa lo siguiente antes de encender: (tensión de correas, chavetas del eje de batido, engrase del piñón, protección del rodamiento 6206, nivel óptimo de agua sal, ajuste del piñón sin juego, dientes completos del piñón, movimiento del tambor derecha-izquierda y arriba-abajo). ¿Todo está en buen estado?"
-                )
+            await message.channel.send(
+                "**Batidora 1**\n\n"
+                "Revisa lo siguiente antes de encender: (tensión de correas, chavetas del eje de batido, engrase del piñón, protección del rodamiento 6206, nivel óptimo de agua sal, ajuste del piñón sin juego, dientes completos del piñón, movimiento del tambor derecha-izquierda y arriba-abajo). ¿Todo está en buen estado?"
+            )
             return
 
         bat = state.get("batidora", 1)
@@ -212,45 +209,42 @@ async def manejar_respuesta(message):
                     next_bat = bat + 1
                     state["batidora"] = next_bat
                     state["paso"] = 1
-                    if not decision.get("mensaje"):
-                        await message.channel.send(
-                            f"**Batidora {next_bat}**\n\n"
-                            "Revisa lo siguiente antes de encender: (tensión de correas, chavetas del eje de batido, engrase del piñón, protección del rodamiento 6206, nivel óptimo de agua sal, ajuste del piñón sin juego, dientes completos del piñón, movimiento del tambor derecha-izquierda y arriba-abajo). ¿Todo está en buen estado?"
-                        )
+                    await message.channel.send(
+                        f"**Batidora {next_bat}**\n\n"
+                        "Revisa lo siguiente antes de encender: (tensión de correas, chavetas del eje de batido, engrase del piñón, protección del rodamiento 6206, nivel óptimo de agua sal, ajuste del piñón sin juego, dientes completos del piñón, movimiento del tambor derecha-izquierda y arriba-abajo). ¿Todo está en buen estado?"
+                    )
                 else:
                     await message.channel.send("✅ Reporte de Encendido de Batidoras completado. ¡Gracias!")
                     del conversation_state[channel_id]
             else:
                 state["paso"] = 2
-                if not decision.get("mensaje"):
-                    await message.channel.send(f"Por favor envía un video del piñón de la batidora {bat} (muestra los dientes y el estado general).")
+                await message.channel.send(f"Por favor envía un video del piñón de la batidora {bat} (muestra los dientes y el estado general).")
         elif paso == 2:
             if bat < 5:
                 next_bat = bat + 1
                 state["batidora"] = next_bat
                 state["paso"] = 1
-                if not decision.get("mensaje"):
-                    await message.channel.send(
-                        f"**Batidora {next_bat}**\n\n"
-                        "Revisa lo siguiente antes de encender: (tensión de correas, chavetas del eje de batido, engrase del piñón, protección del rodamiento 6206, nivel óptimo de agua sal, ajuste del piñón sin juego, dientes completos del piñón, movimiento del tambor derecha-izquierda y arriba-abajo). ¿Todo está en buen estado?"
-                    )
+                await message.channel.send(
+                    f"**Batidora {next_bat}**\n\n"
+                    "Revisa lo siguiente antes de encender: (tensión de correas, chavetas del eje de batido, engrase del piñón, protección del rodamiento 6206, nivel óptimo de agua sal, ajuste del piñón sin juego, dientes completos del piñón, movimiento del tambor derecha-izquierda y arriba-abajo). ¿Todo está en buen estado?"
+                )
             else:
                 await message.channel.send("✅ Reporte de Encendido de Batidoras completado. ¡Gracias!")
                 del conversation_state[channel_id]
 
     elif tipo == "funcionamiento_batidoras":
         bat = state.get("batidora", 1)
-        if decision.get("accion") == "completar" or bat >= 5:
+
+        if bat >= 5 or decision.get("accion") == "completar":
             await message.channel.send("✅ Reporte de Funcionamiento de Batidoras completado. ¡Gracias!")
             del conversation_state[channel_id]
         else:
             next_bat = bat + 1
             state["batidora"] = next_bat
-            if not decision.get("mensaje"):
-                await message.channel.send(
-                    f"**Batidora {next_bat}**\n\n"
-                    "Verifica durante el funcionamiento: (temperatura del cabezote por debajo de 50° y temperatura exacta actual, si está raspando correctamente la mezcla). ¿Cuál es la temperatura del cabezote y está raspando bien?"
-                )
+            await message.channel.send(
+                f"**Batidora {next_bat}**\n\n"
+                "Verifica durante el funcionamiento: (temperatura del cabezote por debajo de 50° y temperatura exacta actual, si está raspando correctamente la mezcla). ¿Cuál es la temperatura del cabezote y está raspando bien?"
+            )
 
     elif tipo == "apagado_batidoras":
         bat = state.get("batidora", 1)
@@ -263,28 +257,25 @@ async def manejar_respuesta(message):
                     next_bat = bat + 1
                     state["batidora"] = next_bat
                     state["paso"] = 1
-                    if not decision.get("mensaje"):
-                        await message.channel.send(
-                            f"**Batidora {next_bat}**\n\n"
-                            "Al apagar confirma: (dientes del piñón, ajuste del piñón, subir cuchilla y la protección del rodamiento, movimiento del eje del tambor en ambos sentidos, hora de encendido y apagado, cantidad de colores batidos, tiempo promedio de las batidas trisabor/gourmet/clásica/sundae). Reporta el estado y los datos."
-                        )
+                    await message.channel.send(
+                        f"**Batidora {next_bat}**\n\n"
+                        "Al apagar confirma: (dientes del piñón, ajuste del piñón, subir cuchilla y la protección del rodamiento, movimiento del eje del tambor en ambos sentidos, hora de encendido y apagado, cantidad de colores batidos, tiempo promedio de las batidas trisabor/gourmet/clásica/sundae). Reporta el estado y los datos."
+                    )
                 else:
                     await message.channel.send("✅ Reporte de Apagado de Batidoras completado. ¡Gracias!")
                     del conversation_state[channel_id]
             else:
                 state["paso"] = 2
-                if not decision.get("mensaje"):
-                    await message.channel.send(f"Por favor envía un video del piñón de la batidora {bat} (muestra los dientes y el estado general).")
+                await message.channel.send(f"Por favor envía un video del piñón de la batidora {bat} (muestra los dientes y el estado general).")
         elif paso == 2:
             if bat < 5:
                 next_bat = bat + 1
                 state["batidora"] = next_bat
                 state["paso"] = 1
-                if not decision.get("mensaje"):
-                    await message.channel.send(
-                        f"**Batidora {next_bat}**\n\n"
-                        "Al apagar confirma: (dientes del piñón, ajuste del piñón, subir cuchilla y la protección del rodamiento, movimiento del eje del tambor en ambos sentidos, hora de encendido y apagado, cantidad de colores batidos, tiempo promedio de las batidas trisabor/gourmet/clásica/sundae). Reporta el estado y los datos."
-                    )
+                await message.channel.send(
+                    f"**Batidora {next_bat}**\n\n"
+                    "Al apagar confirma: (dientes del piñón, ajuste del piñón, subir cuchilla y la protección del rodamiento, movimiento del eje del tambor en ambos sentidos, hora de encendido y apagado, cantidad de colores batidos, tiempo promedio de las batidas trisabor/gourmet/clásica/sundae). Reporta el estado y los datos."
+                )
             else:
                 await message.channel.send("✅ Reporte de Apagado de Batidoras completado. ¡Gracias!")
                 del conversation_state[channel_id]
