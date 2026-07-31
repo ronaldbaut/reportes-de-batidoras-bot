@@ -76,7 +76,8 @@ async def on_message(message):
     content = message.content.strip().lower()
     channel_id = str(message.channel.id)
 
-    if "cancelar" in content:
+    # Cancelación más flexible (acepta errores comunes)
+    if any(palabra in content for palabra in ["cancelar", "canelar", "cancel", "cancela", "cancelar reporte", "canelar reporte"]):
         if channel_id in conversation_state:
             del conversation_state[channel_id]
             await message.channel.send("✅ Reporte cancelado.")
@@ -121,9 +122,9 @@ async def reporte_apagado_batidoras(channel):
 # ================== FUNCIÓN QUE CONSULTA A GROK ==================
 async def consultar_grok(estado_actual: dict, mensaje_usuario: str) -> dict:
     system_prompt = """
-Eres un supervisor estricto de reportes de batidoras en una fábrica de helados.
+Eres un supervisor estricto de reportes de batidoras.
 
-Debes responder ÚNICAMENTE con un JSON válido con esta estructura:
+Responde ÚNICAMENTE con un JSON válido:
 
 {
   "respuesta_valida": true o false,
@@ -132,12 +133,16 @@ Debes responder ÚNICAMENTE con un JSON válido con esta estructura:
   "mensaje": null o "texto"
 }
 
-Reglas:
-- Si la respuesta del trabajador es incompleta, corta o no responde exactamente lo que se preguntó → respuesta_valida = false
-- Cuando respuesta_valida sea false, el campo "mensaje" debe ser un regaño directo y claro (ejemplo: "No me estás diciendo la temperatura exacta ni si está raspando bien. Responde completo.")
-- Sé firme y directo, no amable ni educado de más.
-- Si la respuesta es válida, pon "mensaje": null
-- Sé estricto.
+Instrucciones importantes:
+- Analiza qué información falta exactamente según la pregunta actual.
+- Si falta algo, pon respuesta_valida = false y en "mensaje" di de forma clara, simple y contundente qué falta.
+- Ejemplos de cómo debe ser el mensaje:
+  - "Te falta decirme la temperatura exacta."
+  - "Te falta decirme si está raspando bien."
+  - "Te falta decirme la temperatura y si está raspando bien."
+  - "No me dijiste la hora de encendido."
+- Sé directo y corto. No uses frases largas ni amables.
+- Si la respuesta está completa, pon "mensaje": null
 """
 
     user_content = f"""
@@ -181,13 +186,11 @@ async def manejar_respuesta(message):
 
     decision = await consultar_grok(state, message.content)
 
-    # Si la respuesta no es válida → regaño y paramos
     if not decision.get("respuesta_valida", True):
-        mensaje = decision.get("mensaje") or "Tu respuesta está incompleta. Responde bien lo que se te preguntó."
+        mensaje = decision.get("mensaje") or "Tu respuesta está incompleta. Di exactamente lo que se te pidió."
         await message.channel.send(mensaje)
         return
 
-    # ===== Respuesta válida =====
     if tipo == "encendido_batidoras":
         if not state.get("hora_recibida", False):
             state["hora_recibida"] = True
