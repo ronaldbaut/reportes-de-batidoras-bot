@@ -125,7 +125,6 @@ def es_respuesta_negativa(texto: str) -> bool:
     t = texto.lower().strip()
     if not t:
         return False
-    # Casos directos cortos
     if t in ["no", "nope", "mal", "nada", "ninguno", "falla", "fallo"]:
         return True
     patrones = [
@@ -154,6 +153,64 @@ def es_respuesta_negativa(texto: str) -> bool:
     ]
     return any(p in t for p in patrones)
 
+# ================== FUNCIÓN QUE CONSULTA A GROK ==================
+async def consultar_grok(estado_actual: dict, mensaje_usuario: str) -> dict:
+    """
+    Envía el contexto actual + mensaje del trabajador a Grok
+    y recibe una decisión estructurada en JSON.
+    """
+
+    system_prompt = """
+Eres un asistente experto que controla el flujo de reportes de batidoras de una fábrica de helados.
+Tu trabajo es analizar la respuesta del trabajador y decidir qué hacer a continuación.
+
+Debes responder ÚNICAMENTE con un JSON válido con esta estructura exacta:
+
+{
+  "respuesta_valida": true o false,
+  "es_negativa": true o false,
+  "accion": "avanzar" | "pedir_aclaracion" | "saltar_batidora" | "completar",
+  "mensaje": "el texto exacto que el bot debe enviar al canal"
+}
+
+Reglas:
+- Si la respuesta es muy corta, vacía, irrelevante o no responde a lo que se preguntó → respuesta_valida = false y accion = "pedir_aclaracion"
+- Si claramente indica problema / no funciona / mal estado → es_negativa = true
+- Sé estricto pero justo. No avances si la respuesta es ambigua.
+- El campo "mensaje" debe ser claro, directo y en español.
+"""
+
+    user_content = f"""
+Estado actual del reporte:
+{json.dumps(estado_actual, ensure_ascii=False, indent=2)}
+
+Mensaje del trabajador:
+"{mensaje_usuario}"
+"""
+
+    try:
+        response = client.chat.completions.create(
+            model="grok-4-1-fast",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_content}
+            ],
+            temperature=0.1,
+            response_format={"type": "json_object"}
+        )
+
+        resultado = json.loads(response.choices[0].message.content)
+        return resultado
+
+    except Exception as e:
+        print(f"Error al consultar Grok: {e}")
+        return {
+            "respuesta_valida": True,
+            "es_negativa": False,
+            "accion": "avanzar",
+            "mensaje": None
+        }
+
 # ================== MANEJO DE RESPUESTAS ==================
 async def manejar_respuesta(message):
     channel_id = str(message.channel.id)
@@ -164,7 +221,6 @@ async def manejar_respuesta(message):
     await message.channel.send("✅")
 
     if tipo == "encendido_batidoras":
-        # Primera respuesta: hora de encendido (global)
         if not state.get("hora_recibida", False):
             state["hora_recibida"] = True
             state["batidora"] = 1
@@ -181,7 +237,6 @@ async def manejar_respuesta(message):
 
         if paso == 1:
             if negativo:
-                # Saltar esta batidora (no pedir video), ir directo a la siguiente
                 if bat < 5:
                     next_bat = bat + 1
                     state["batidora"] = next_bat
@@ -194,11 +249,9 @@ async def manejar_respuesta(message):
                     await message.channel.send("✅ Reporte de Encendido de Batidoras completado. ¡Gracias!")
                     del conversation_state[channel_id]
             else:
-                # Normal: pedir video
                 state["paso"] = 2
                 await message.channel.send(f"Por favor envía un video del piñón de la batidora {bat} (muestra los dientes y el estado general).")
         elif paso == 2:
-            # Después del video → siguiente batidora
             if bat < 5:
                 next_bat = bat + 1
                 state["batidora"] = next_bat
@@ -231,7 +284,6 @@ async def manejar_respuesta(message):
 
         if paso == 1:
             if negativo:
-                # Saltar video y esta batidora, ir directo a la siguiente
                 if bat < 5:
                     next_bat = bat + 1
                     state["batidora"] = next_bat
