@@ -76,7 +76,7 @@ async def on_message(message):
     content = message.content.strip().lower()
     channel_id = str(message.channel.id)
 
-    # Cancelación más flexible (acepta errores comunes)
+    # Cancelación flexible
     if any(palabra in content for palabra in ["cancelar", "canelar", "cancel", "cancela", "cancelar reporte", "canelar reporte"]):
         if channel_id in conversation_state:
             del conversation_state[channel_id]
@@ -136,12 +136,11 @@ Responde ÚNICAMENTE con un JSON válido:
 Instrucciones importantes:
 - Analiza qué información falta exactamente según la pregunta actual.
 - Si falta algo, pon respuesta_valida = false y en "mensaje" di de forma clara, simple y contundente qué falta.
-- Ejemplos de cómo debe ser el mensaje:
+- Ejemplos:
   - "Te falta decirme la temperatura exacta."
   - "Te falta decirme si está raspando bien."
   - "Te falta decirme la temperatura y si está raspando bien."
-  - "No me dijiste la hora de encendido."
-- Sé directo y corto. No uses frases largas ni amables.
+- Sé directo y corto.
 - Si la respuesta está completa, pon "mensaje": null
 """
 
@@ -184,13 +183,27 @@ async def manejar_respuesta(message):
     except:
         pass
 
-    decision = await consultar_grok(state, message.content)
+    # Si el mensaje tiene video o imagen → avanzamos sin llamar a Grok
+    tiene_media = any(att.content_type and (att.content_type.startswith("video/") or att.content_type.startswith("image/")) for att in message.attachments)
 
-    if not decision.get("respuesta_valida", True):
-        mensaje = decision.get("mensaje") or "Tu respuesta está incompleta. Di exactamente lo que se te pidió."
-        await message.channel.send(mensaje)
-        return
+    if tiene_media:
+        # Tratamos el media como respuesta válida y avanzamos
+        decision = {
+            "respuesta_valida": True,
+            "es_negativa": False,
+            "accion": "avanzar",
+            "mensaje": None
+        }
+    else:
+        # Solo texto → consultamos a Grok
+        decision = await consultar_grok(state, message.content)
 
+        if not decision.get("respuesta_valida", True):
+            mensaje = decision.get("mensaje") or "Tu respuesta está incompleta. Di exactamente lo que se te pidió."
+            await message.channel.send(mensaje)
+            return
+
+    # ===== A partir de aquí la respuesta es válida =====
     if tipo == "encendido_batidoras":
         if not state.get("hora_recibida", False):
             state["hora_recibida"] = True
