@@ -145,17 +145,17 @@ Responde ÚNICAMENTE JSON:
   "batidas": entero positivo o null
 }
 
-Principios:
-1. Evalúa BUFFER + respuesta nueva juntos. Nunca pidas un dato que ya esté en el buffer.
-2. Typos y español informal de planta OK.
-3. Rechaza solo vacío, ".", o texto irrelevante a la pregunta.
-4. No calcules promedios, duraciones ni metas. Solo extrae. El tiempo lo calcula el código.
-5. hora: 7am → "07:00", 1:15 pm → "13:15", 12:40 pm → "12:40". Si no hay am/pm, pon la hora en 24h lo mejor que puedas.
-6. agua_sal_cambios solo en la fase de agua sal. Si dijeron que no, lista vacía. Si no dijeron las veces, veces=1.
-7. En limpieza, limpio=true si quedó limpio. Si no, limpio=false y pendiente_limpieza con lo que nombraron.
-8. batidas es un entero positivo. null si no hay número.
-9. Llena solo los campos de la fase actual; el resto null.
-10. mensaje en español corto, pidiendo únicamente lo que falta.
+Principios (sin numerar: el número de la batidora no es una regla):
+- Evalúa BUFFER + respuesta nueva juntos. Nunca pidas un dato que ya esté en el buffer.
+- Typos y español informal de planta OK.
+- Rechaza solo vacío, ".", o texto irrelevante a la pregunta.
+- No calcules promedios, duraciones ni metas. Solo extrae. El tiempo lo calcula el código.
+- hora: 7am → "07:00", 1:15 pm → "13:15", 12:40 pm → "12:40". Si no hay am/pm, pon la hora en 24h lo mejor que puedas.
+- agua_sal_cambios solo en la fase de agua sal. Si dijeron que no, lista vacía. Si no dijeron las veces, veces=1.
+- En limpieza, limpio=true si quedó limpio. Si no, limpio=false y pendiente_limpieza con lo que nombraron.
+- batidas es un entero positivo. null si no hay número.
+- Llena solo los campos de la fase actual; el resto null.
+- mensaje en español corto, pidiendo únicamente lo que falta.
 """
 
 
@@ -1317,6 +1317,42 @@ def _combinar_decision_cierre(state: dict, texto: str, decision: dict) -> dict:
 
 
 # ================== HELPERS ==================
+def _como_bool(valor) -> bool:
+    """JSON a veces manda false como texto. bool("false") en Python es True."""
+    if isinstance(valor, bool):
+        return valor
+    if isinstance(valor, (int, float)):
+        return valor != 0
+    if isinstance(valor, str):
+        return valor.strip().lower() in {"true", "1", "si", "sí", "yes", "verdadero"}
+    return False
+
+
+def _texto_fuera_de_servicio(texto: str) -> bool:
+    """
+    La máquina no se usó hoy. No basta con que el modelo lo diga:
+    en la batidora 4 confundía la regla 4 del prompt con la máquina.
+    """
+    t = _norm_es(texto)
+    if not t:
+        return False
+    return bool(
+        re.search(
+            r"\bno\s+funcion\w*"
+            r"|\bno\s+esta\s+en\s+(funcionamiento|uso|servicio)"
+            r"|\bno\s+se\s+enciend\w*"
+            r"|\bno\s+se\s+prend\w*"
+            r"|\bno\s+enciend\w*"
+            r"|\bno\s+trabaj\w*\b(?!\s+(bien|mal|igual|parejo))"
+            r"|\bno\s+se\s+uso\b(?!\s+(grasa|aceite|sal|agua|bien))"
+            r"|\ben\s+reparacion\b"
+            r"|\bfuera\s+de\s+servicio\b"
+            r"|(?<!no )(?:esta|quedo|queda|dejo|dejamos|sigue)\s+apagad[ao]s?\b",
+            t,
+        )
+    )
+
+
 def _vacio_o_basura(texto: str, tiene_media: bool) -> bool:
     t = (texto or "").strip()
     if tiene_media:
@@ -1809,14 +1845,15 @@ Responde ÚNICAMENTE JSON:
   "mensaje": null o "texto corto pidiendo SOLO lo que falta"
 }
  
-Principios:
-1. Evalúa si la INFORMACIÓN esencial está (buffer + respuesta nueva), no si la frase es perfecta.
-2. Typos y español informal OK ("se pagado", "hechar grasa", "iso").
-3. es_fuera_de_servicio=true si dice que no funciona / reparación / no se usó / no se encendió.
-4. Si es_fuera_de_servicio y se entiende → respuesta_valida=true.
-5. Nunca uses el mensaje genérico "Tu mensaje está incompleto" sin decir qué falta.
-6. Nunca pidas "confirmar el encendido" en la fase de checklist de estado.
-7. temperature-level: sé práctico para operarios de planta, no un auditor legal.
+Principios (sin numerar: la batidora 4 no es la regla 4):
+- Evalúa si la INFORMACIÓN esencial está (buffer + respuesta nueva), no si la frase es perfecta.
+- Typos y español informal OK ("se pagado", "hechar grasa", "iso").
+- es_fuera_de_servicio=true SOLO si el texto dice que no funciona, está en reparación, no se usó o no se encendió.
+- Si es_fuera_de_servicio y se entiende → respuesta_valida=true.
+- Nunca uses el mensaje genérico "Tu mensaje está incompleto" sin decir qué falta.
+- Nunca pidas "confirmar el encendido" en la fase de checklist de estado.
+- temperature-level: sé práctico para operarios de planta, no un auditor legal.
+- El número de la batidora (1, 2, 3, 4 o 5) NO cambia estas reglas.
  
 Errores reales que DEBES evitar:
 - Rechazar un checklist detallado (correas, grasa, dientes, agua sal) como "incompleto".
@@ -1876,8 +1913,8 @@ Evalúa BUFFER + respuesta nueva juntos.
             except (TypeError, ValueError):
                 batidas_n = None
         return {
-            "respuesta_valida": bool(data.get("respuesta_valida", False)),
-            "es_fuera_de_servicio": bool(data.get("es_fuera_de_servicio", False)),
+            "respuesta_valida": _como_bool(data.get("respuesta_valida", False)),
+            "es_fuera_de_servicio": _como_bool(data.get("es_fuera_de_servicio", False)),
             "mensaje": data.get("mensaje"),
             "agua_sal_cambios": data.get("agua_sal_cambios"),
             "limpio": limpio,
@@ -1897,13 +1934,7 @@ Evalúa BUFFER + respuesta nueva juntos.
         # Fail-open con texto real
         return {
             "respuesta_valida": True,
-            "es_fuera_de_servicio": bool(
-                re.search(
-                    r"no\s+(est[aá]|funciona|se\s+us|enciend)|reparaci[oó]n|fuera\s+de\s+servicio",
-                    respuesta_nueva,
-                    re.I,
-                )
-            ),
+            "es_fuera_de_servicio": _texto_fuera_de_servicio(respuesta_nueva),
             "mensaje": None,
         }
  
@@ -2051,7 +2082,9 @@ async def manejar_respuesta(message: discord.Message):
     except Exception:
         pass
  
-    fuera = decision.get("es_fuera_de_servicio", False)
+    # El modelo a veces marca fuera de servicio al ver "batidora 4" (la regla 4
+    # del prompt hablaba de eso). Solo saltamos el video si el texto lo dice.
+    fuera = _texto_fuera_de_servicio(buffer_completo)
 
     if fase in FASES_CIERRE_APAGADO:
         await _avanzar_cierre_apagado(message, state, buffer_completo, decision)
