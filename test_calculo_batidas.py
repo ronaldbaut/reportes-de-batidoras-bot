@@ -146,6 +146,147 @@ def test_limpieza():
     assert junto["cambios"][0]["batidora"] == 2
 
 
+def test_orden_de_las_preguntas_nuevas():
+    assert main.FASES_CIERRE_APAGADO == (
+        "agua_sal",
+        "limpieza",
+        "hora_llegada",
+        "batidas",
+        "hora_culminacion",
+        "num_batidoras",
+        "pausa",
+    )
+    assert "cuántas batidoras" in main.PREGUNTAS_CIERRE["num_batidoras"].lower()
+    assert "0" in main.PREGUNTAS_CIERRE["pausa"]
+    assert "30,5" in main.PREGUNTAS_CIERRE["pausa"]
+
+
+def test_minutos_de_pausa_con_coma_o_punto():
+    assert main.parsear_minutos_pausa("0") == 0
+    assert main.parsear_minutos_pausa("no") == 0
+    assert main.parsear_minutos_pausa("sin pausa") == 0
+    assert main.parsear_minutos_pausa("no hubo pausa") == 0
+    assert main.parsear_minutos_pausa("40") == 40
+    assert main.parsear_minutos_pausa("40 minutos") == 40
+    assert main.parsear_minutos_pausa("30,5") == 30.5
+    assert main.parsear_minutos_pausa("30.5 minutos") == 30.5
+    assert main.parsear_minutos_pausa("1,5 horas") == 90
+    assert main.parsear_minutos_pausa("1 hora") == 60
+    assert main.parsear_minutos_pausa("media hora") == 30
+    assert main.parsear_minutos_pausa("hora y media") == 90
+    assert main.parsear_minutos_pausa("sí, 20") == 20
+    assert main.parsear_minutos_pausa("sí") is None
+    assert main.parsear_minutos_pausa("15 y 20") is None
+    assert main.parsear_minutos_pausa("1 hora 30 min") is None
+    assert main.parsear_minutos_pausa("9 horas") is None
+
+
+def test_numero_de_batidoras():
+    assert main.parsear_num_batidoras("4") == 4
+    assert main.parsear_num_batidoras("con 3") == 3
+    assert main.parsear_num_batidoras("tres") == 3
+    assert main.parsear_num_batidoras("trabajamos con cuatro") == 4
+    assert main.parsear_num_batidoras("3 y 4") is None
+    assert main.parsear_num_batidoras("3,5") is None
+    assert main.parsear_num_batidoras("3.5") is None
+    assert main.parsear_num_batidoras("0") is None
+    assert main.parsear_num_batidoras("6") is None
+    assert main.parsear_num_batidoras("no") is None
+
+    state = {"fase": "num_batidoras", "answers": {}}
+    ambigua = main._combinar_decision_cierre(state, "3 y 4", {})
+    assert ambigua["respuesta_valida"] is False
+    clara = main._combinar_decision_cierre(state, "con tres", {})
+    assert clara["respuesta_valida"] is True
+    assert clara["_batidoras"] == 3
+
+    state_p = {"fase": "pausa", "answers": {}}
+    cero = main._combinar_decision_cierre(state_p, "sin pausa", {})
+    assert cero["respuesta_valida"] is True
+    assert cero["_pausa_min"] == 0
+    media = main._combinar_decision_cierre(state_p, "30,5 minutos", {})
+    assert media["_pausa_min"] == 30.5
+    # Si el acumulado queda ambiguo, vale el último mensaje claro.
+    seguido = main._combinar_decision_cierre(state, "3 y 4\n3", {})
+    assert seguido["respuesta_valida"] is True
+    assert seguido["_batidoras"] == 3
+    seguido_p = main._combinar_decision_cierre(state_p, "15 y 20\n15,5", {})
+    assert seguido_p["respuesta_valida"] is True
+    assert seguido_p["_pausa_min"] == 15.5
+
+
+def test_pausa_y_batidoras_ajustan_el_promedio():
+    # Sin datos nuevos: la cuenta de siempre (4 batidoras y pausa 0, sin decirlo).
+    base = main.calcular_tiempo_por_batida("7:00 am", "12:40 pm", 12)
+    assert base["total_min"] == 340
+    assert base["promedio"] == 340 / 12
+    assert "pausa_min" not in base
+    assert "num_batidoras" not in base
+
+    cuatro = main.calcular_tiempo_por_batida(
+        "7:00 am", "12:40 pm", 12, num_batidoras=4, pausa_min=0
+    )
+    assert cuatro["bruto_min"] == 340
+    assert cuatro["pausa_min"] == 0
+    assert cuatro["total_min"] == 340
+    assert cuatro["num_batidoras"] == 4
+    assert cuatro["promedio"] == base["promedio"]
+    assert cuatro["cumplio"] is True
+    texto_cuatro = main.formatear_calculo_batidas(cuatro)
+    assert "Tiempo bruto: 5 h 40 min" in texto_cuatro
+    assert "Pausa descontada: 0 min" in texto_cuatro
+    assert "Tiempo neto: 5 h 40 min" in texto_cuatro
+    assert "Batidoras: 4" in texto_cuatro
+    assert "28,3 min por batida" in texto_cuatro
+    assert "ajuste" not in texto_cuatro
+
+    con_pausa = main.calcular_tiempo_por_batida(
+        "7:00 am", "12:40 pm", 12, num_batidoras=4, pausa_min=40
+    )
+    assert con_pausa["total_min"] == 300
+    assert con_pausa["promedio"] == 300 / 12
+    assert con_pausa["cumplio"] is True
+    assert "Pausa descontada: 40 min" in main.formatear_calculo_batidas(con_pausa)
+    assert "Tiempo neto: 5 h" in main.formatear_calculo_batidas(con_pausa)
+    assert "25,0 min por batida" in main.formatear_calculo_batidas(con_pausa)
+
+    tres = main.calcular_tiempo_por_batida(
+        "7:00 am", "12:40 pm", 12, num_batidoras=3, pausa_min=0
+    )
+    assert tres["promedio"] == (340 / 12) * (3 / 4)
+    texto_tres = main.formatear_calculo_batidas(tres)
+    assert "Batidoras: 3 (ajuste × 3/4, la referencia es 4)" in texto_tres
+    assert "21,2 min por batida" in texto_tres
+
+    tres_pausa = main.calcular_tiempo_por_batida(
+        "7:00 am", "12:40 pm", 12, num_batidoras="3", pausa_min="40"
+    )
+    assert tres_pausa["num_batidoras"] == 3
+    assert tres_pausa["promedio"] == (300 / 12) * (3 / 4)
+    assert "18,8 min por batida" in main.formatear_calculo_batidas(tres_pausa)
+
+    # Misma cadencia por máquina: 9 batidas con 3 ≡ 12 batidas con 4.
+    nueve = main.calcular_tiempo_por_batida(
+        "7:00 am", "12:40 pm", 9, num_batidoras=3, pausa_min=0
+    )
+    assert abs(nueve["promedio"] - base["promedio"]) < 1e-9
+
+    decimal = main.calcular_tiempo_por_batida(
+        "7:00 am", "12:40 pm", 12, num_batidoras=4, pausa_min="30,5"
+    )
+    assert decimal["pausa_min"] == 30.5
+    assert decimal["total_min"] == 309.5
+    assert abs(decimal["promedio"] - (309.5 / 12)) < 1e-9
+    assert "Pausa descontada: 30,5 min" in main.formatear_calculo_batidas(decimal)
+
+    cubre = main.calcular_tiempo_por_batida(
+        "7:00 am", "12:40 pm", 12, num_batidoras=4, pausa_min=340
+    )
+    assert cubre["ok"] is False
+    assert "cubre todo el tiempo" in cubre["mensaje"]
+    assert "5 h 40 min" in main.formatear_calculo_batidas(cubre)
+
+
 def test_combinar_no_repite_si_ya_hay_hora():
     state = {"fase": "hora_llegada", "answers": {}}
     decision = main._combinar_decision_cierre(
