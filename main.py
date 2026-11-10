@@ -42,9 +42,9 @@ client = OpenAI(
 conversation_state = {}
  
 NUM_BATIDORAS = 5
-# Meta CMI: minutos de reloj (llegada → fin, limpieza incluida) por batida.
-# Ese promedio histórico es tiempo / batidas y equivale a trabajar con 4.
-# Con otro número: (tiempo neto / batidas) × (batidoras / 4).
+# Meta CMI con 4 batidoras: minutos de reloj por batida.
+# El promedio siempre es tiempo neto / batidas (sin factor por máquina).
+# Con otro número la meta sube: 30 × 4 / batidoras (3 → 40, 2 → 60).
 META_MIN_POR_BATIDA = 30
 BATIDORAS_REF_PROMEDIO = 4
 # Tope de la pausa, el mismo que reporte-de-cierre-2 (8 horas).
@@ -463,6 +463,12 @@ def _fmt_un_decimal(valor: float) -> str:
     return f"{valor:.1f}".replace(".", ",")
 
 
+def _fmt_meta(valor) -> str:
+    if isinstance(valor, int) or float(valor).is_integer():
+        return str(int(valor))
+    return _fmt_un_decimal(float(valor))
+
+
 def _fmt_margen(valor: float) -> str:
     texto = _fmt_un_decimal(valor)
     if texto in {"0,0", "-0,0"} and valor > 0:
@@ -625,6 +631,11 @@ def _como_minutos_pausa(valor):
     return parsear_minutos_pausa(str(valor))
 
 
+def meta_para_batidoras(num_batidoras: int):
+    """Minutos de meta: 30 con 4 batidoras, 40 con 3, 60 con 2."""
+    return _numero_limpio(META_MIN_POR_BATIDA * BATIDORAS_REF_PROMEDIO / num_batidoras)
+
+
 def calcular_tiempo_por_batida(
     llegada: str,
     culminacion: str,
@@ -635,10 +646,9 @@ def calcular_tiempo_por_batida(
     """
     Promedio de minutos por batida. La cuenta es solo Python.
 
-    Sin num_batidoras ni pausa_min queda la cuenta de siempre:
-    (culminación − llegada) / batidas, que es la de 4 batidoras y pausa 0.
-    Si se indican, el tiempo neto es el de reloj menos la pausa y
-    el promedio es (neto / batidas) × (batidoras / 4).
+    Promedio = (culminación − llegada − pausa) / batidas.
+    Sin pausa ni número de batidoras, la pausa es 0 y la meta es 30.
+    Si dicen cuántas batidoras hubo, la meta es 30 × 4 / ese número.
     """
     t0 = parsear_hora_minutos(str(llegada or ""))
     t1 = parsear_hora_minutos(str(culminacion or ""), llegada_min=t0)
@@ -700,10 +710,8 @@ def calcular_tiempo_por_batida(
         }
     neto = bruto - float(pausa_val)
     usadas = n_bat if n_bat is not None else BATIDORAS_REF_PROMEDIO
-    if usadas == BATIDORAS_REF_PROMEDIO:
-        promedio = neto / n
-    else:
-        promedio = neto / n * (usadas / BATIDORAS_REF_PROMEDIO)
+    promedio = neto / n
+    meta = meta_para_batidoras(usadas)
     total = _numero_limpio(neto)
     resultado = {
         "ok": True,
@@ -712,7 +720,8 @@ def calcular_tiempo_por_batida(
         "total_min": total,
         "batidas": n,
         "promedio": promedio,
-        "cumplio": promedio <= META_MIN_POR_BATIDA + 1e-9,
+        "meta": meta,
+        "cumplio": promedio <= float(meta) + 1e-9,
     }
     if batidoras_explicitas or pausa_explicita:
         resultado["bruto_min"] = bruto
@@ -725,7 +734,8 @@ def formatear_calculo_batidas(calc: dict) -> str:
     if not calc or not calc.get("ok"):
         motivo = (calc or {}).get("mensaje") or "No pude calcular el tiempo por batida."
         return f"📊 **Cálculo de tiempo por batida**\n{motivo}"
-    diff = META_MIN_POR_BATIDA - calc["promedio"]
+    meta = calc.get("meta", META_MIN_POR_BATIDA)
+    diff = float(meta) - calc["promedio"]
     if "pausa_min" in calc:
         linea_tiempo = [
             f"• Tiempo bruto: {_fmt_duracion(calc.get('bruto_min', calc['total_min']))}",
@@ -743,18 +753,14 @@ def formatear_calculo_batidas(calc: dict) -> str:
     ]
     if "num_batidoras" in calc:
         nbat = int(calc["num_batidoras"])
-        if nbat == BATIDORAS_REF_PROMEDIO:
-            lineas.append(f"• Batidoras: {nbat}")
-        else:
-            lineas.append(
-                f"• Batidoras: {nbat} "
-                f"(ajuste × {nbat}/{BATIDORAS_REF_PROMEDIO}, "
-                f"la referencia es {BATIDORAS_REF_PROMEDIO})"
-            )
+        lineas.append(f"• Batidoras: {nbat}")
+        linea_meta = f"• Meta con {nbat} batidoras: **{_fmt_meta(meta)} min**"
+    else:
+        linea_meta = f"• Meta (CMI): **{META_MIN_POR_BATIDA} min por batida o menos**"
     lineas.extend(
         [
             f"• Promedio: **{_fmt_un_decimal(calc['promedio'])} min por batida**",
-            f"• Meta (CMI): **{META_MIN_POR_BATIDA} min por batida o menos**",
+            linea_meta,
         ]
     )
     if calc.get("cumplio"):
@@ -1382,6 +1388,7 @@ async def _cerrar_apagado(message: discord.Message, state: dict):
                 "batidas": calc["batidas"],
                 "num_batidoras": calc.get("num_batidoras", BATIDORAS_REF_PROMEDIO),
                 "promedio_min": round(calc["promedio"], 1),
+                "meta_min": calc.get("meta", META_MIN_POR_BATIDA),
                 "cumplio": bool(calc["cumplio"]),
             }
         )

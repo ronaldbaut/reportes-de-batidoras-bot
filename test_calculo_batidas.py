@@ -215,13 +215,19 @@ def test_numero_de_batidoras():
     assert seguido_p["_pausa_min"] == 15.5
 
 
-def test_pausa_y_batidoras_ajustan_el_promedio():
-    # Sin datos nuevos: la cuenta de siempre (4 batidoras y pausa 0, sin decirlo).
+def test_pausa_resta_tiempo_y_la_meta_depende_de_las_batidoras():
+    # Sin datos nuevos: tiempo / batidas y meta de 30, como antes.
     base = main.calcular_tiempo_por_batida("7:00 am", "12:40 pm", 12)
     assert base["total_min"] == 340
     assert base["promedio"] == 340 / 12
+    assert base["meta"] == 30
     assert "pausa_min" not in base
     assert "num_batidoras" not in base
+    assert "Meta (CMI)" in main.formatear_calculo_batidas(base)
+
+    assert main.meta_para_batidoras(4) == 30
+    assert main.meta_para_batidoras(3) == 40
+    assert main.meta_para_batidoras(2) == 60
 
     cuatro = main.calcular_tiempo_por_batida(
         "7:00 am", "12:40 pm", 12, num_batidoras=4, pausa_min=0
@@ -230,7 +236,8 @@ def test_pausa_y_batidoras_ajustan_el_promedio():
     assert cuatro["pausa_min"] == 0
     assert cuatro["total_min"] == 340
     assert cuatro["num_batidoras"] == 4
-    assert cuatro["promedio"] == base["promedio"]
+    assert cuatro["promedio"] == 340 / 12
+    assert cuatro["meta"] == 30
     assert cuatro["cumplio"] is True
     texto_cuatro = main.formatear_calculo_batidas(cuatro)
     assert "Tiempo bruto: 5 h 40 min" in texto_cuatro
@@ -238,6 +245,7 @@ def test_pausa_y_batidoras_ajustan_el_promedio():
     assert "Tiempo neto: 5 h 40 min" in texto_cuatro
     assert "Batidoras: 4" in texto_cuatro
     assert "28,3 min por batida" in texto_cuatro
+    assert "Meta con 4 batidoras: **30 min**" in texto_cuatro
     assert "ajuste" not in texto_cuatro
 
     con_pausa = main.calcular_tiempo_por_batida(
@@ -245,31 +253,57 @@ def test_pausa_y_batidoras_ajustan_el_promedio():
     )
     assert con_pausa["total_min"] == 300
     assert con_pausa["promedio"] == 300 / 12
+    assert con_pausa["meta"] == 30
     assert con_pausa["cumplio"] is True
-    assert "Pausa descontada: 40 min" in main.formatear_calculo_batidas(con_pausa)
-    assert "Tiempo neto: 5 h" in main.formatear_calculo_batidas(con_pausa)
-    assert "25,0 min por batida" in main.formatear_calculo_batidas(con_pausa)
+    texto_pausa = main.formatear_calculo_batidas(con_pausa)
+    assert "Pausa descontada: 40 min" in texto_pausa
+    assert "Tiempo neto: 5 h" in texto_pausa
+    assert "25,0 min por batida" in texto_pausa
+    assert "Meta con 4 batidoras: **30 min**" in texto_pausa
 
     tres = main.calcular_tiempo_por_batida(
         "7:00 am", "12:40 pm", 12, num_batidoras=3, pausa_min=0
     )
-    assert tres["promedio"] == (340 / 12) * (3 / 4)
+    assert tres["promedio"] == 340 / 12
+    assert tres["meta"] == 40
+    assert tres["cumplio"] is True
     texto_tres = main.formatear_calculo_batidas(tres)
-    assert "Batidoras: 3 (ajuste × 3/4, la referencia es 4)" in texto_tres
-    assert "21,2 min por batida" in texto_tres
+    assert "Batidoras: 3" in texto_tres
+    assert "28,3 min por batida" in texto_tres
+    assert "Meta con 3 batidoras: **40 min**" in texto_tres
+    assert "ajuste" not in texto_tres
 
     tres_pausa = main.calcular_tiempo_por_batida(
         "7:00 am", "12:40 pm", 12, num_batidoras="3", pausa_min="40"
     )
     assert tres_pausa["num_batidoras"] == 3
-    assert tres_pausa["promedio"] == (300 / 12) * (3 / 4)
-    assert "18,8 min por batida" in main.formatear_calculo_batidas(tres_pausa)
+    assert tres_pausa["promedio"] == 300 / 12
+    assert tres_pausa["meta"] == 40
+    assert tres_pausa["cumplio"] is True
+    texto_tres_pausa = main.formatear_calculo_batidas(tres_pausa)
+    assert "25,0 min por batida" in texto_tres_pausa
+    assert "Meta con 3 batidoras: **40 min**" in texto_tres_pausa
 
-    # Misma cadencia por máquina: 9 batidas con 3 ≡ 12 batidas con 4.
-    nueve = main.calcular_tiempo_por_batida(
-        "7:00 am", "12:40 pm", 9, num_batidoras=3, pausa_min=0
+    # 36 min queda por encima de 30 y dentro de la meta de 40.
+    justo = main.calcular_tiempo_por_batida(
+        "7:00 am", "1:00 pm", 10, num_batidoras=3, pausa_min=0
     )
-    assert abs(nueve["promedio"] - base["promedio"]) < 1e-9
+    assert justo["promedio"] == 36
+    assert justo["meta"] == 40
+    assert justo["cumplio"] is True
+    assert "4,0 min por debajo" in main.formatear_calculo_batidas(justo)
+    con_cuatro = main.calcular_tiempo_por_batida(
+        "7:00 am", "1:00 pm", 10, num_batidoras=4, pausa_min=0
+    )
+    assert con_cuatro["cumplio"] is False
+    assert con_cuatro["meta"] == 30
+
+    dos = main.calcular_tiempo_por_batida(
+        "7:00 am", "12:40 pm", 12, num_batidoras=2, pausa_min=0
+    )
+    assert dos["promedio"] == 340 / 12
+    assert dos["meta"] == 60
+    assert "Meta con 2 batidoras: **60 min**" in main.formatear_calculo_batidas(dos)
 
     decimal = main.calcular_tiempo_por_batida(
         "7:00 am", "12:40 pm", 12, num_batidoras=4, pausa_min="30,5"
@@ -277,6 +311,7 @@ def test_pausa_y_batidoras_ajustan_el_promedio():
     assert decimal["pausa_min"] == 30.5
     assert decimal["total_min"] == 309.5
     assert abs(decimal["promedio"] - (309.5 / 12)) < 1e-9
+    assert decimal["meta"] == 30
     assert "Pausa descontada: 30,5 min" in main.formatear_calculo_batidas(decimal)
 
     cubre = main.calcular_tiempo_por_batida(
