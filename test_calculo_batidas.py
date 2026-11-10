@@ -146,6 +146,201 @@ def test_limpieza():
     assert junto["cambios"][0]["batidora"] == 2
 
 
+def test_orden_de_las_preguntas_nuevas():
+    assert main.FASES_CIERRE_APAGADO == (
+        "agua_sal",
+        "limpieza",
+        "hora_llegada",
+        "batidas",
+        "hora_culminacion",
+        "batidoras_dia",
+        "batidoras_parcial",
+    )
+    assert "todo el día" in main.PREGUNTAS_CIERRE["batidoras_dia"].lower()
+    assert "parte del día" in main.PREGUNTAS_CIERRE["batidoras_parcial"].lower()
+    assert "2,5" in main.PREGUNTAS_CIERRE["batidoras_parcial"]
+    assert "pausa" not in main.FASES_CIERRE_APAGADO
+    assert "pausa" not in main.PREGUNTAS_CIERRE
+
+
+def test_numero_de_batidoras():
+    assert main.parsear_batidoras_dia("4") == 4
+    assert main.parsear_batidoras_dia("con 3") == 3
+    assert main.parsear_batidoras_dia("tres") == 3
+    assert main.parsear_batidoras_dia("trabajamos con cuatro") == 4
+    assert main.parsear_batidoras_dia("0") == 0
+    assert main.parsear_batidoras_dia("no") == 0
+    assert main.parsear_batidoras_dia("ninguna") == 0
+    assert main.parsear_batidoras_dia("3 y 4") is None
+    assert main.parsear_batidoras_dia("3,5") is None
+    assert main.parsear_batidoras_dia("3.5") is None
+    assert main.parsear_batidoras_dia("6") is None
+
+    assert main.parsear_horas_parciales("0") == []
+    assert main.parsear_horas_parciales("no") == []
+    assert main.parsear_horas_parciales("ninguna") == []
+    assert main.parsear_horas_parciales("4") == [4]
+    assert main.parsear_horas_parciales("4 y 2,5") == [4, 2.5]
+    assert main.parsear_horas_parciales("4 y 2.5") == [4, 2.5]
+    assert main.parsear_horas_parciales("4:30") == [4.5]
+    assert main.parsear_horas_parciales("4:30 y 2,5") == [4.5, 2.5]
+    assert main.parsear_horas_parciales("cuatro") == [4]
+    assert main.parsear_horas_parciales("sí") is None
+    assert main.parsear_horas_parciales("4:60") is None
+    assert main.parsear_horas_parciales("30") is None
+
+    state = {"fase": "batidoras_dia", "answers": {}}
+    ambigua = main._combinar_decision_cierre(state, "3 y 4", {})
+    assert ambigua["respuesta_valida"] is False
+    clara = main._combinar_decision_cierre(state, "con tres", {})
+    assert clara["respuesta_valida"] is True
+    assert clara["_batidoras_dia"] == 3
+    cero_dia = main._combinar_decision_cierre(state, "ninguna", {})
+    assert cero_dia["_batidoras_dia"] == 0
+    seguido = main._combinar_decision_cierre(state, "3 y 4\n3", {})
+    assert seguido["respuesta_valida"] is True
+    assert seguido["_batidoras_dia"] == 3
+
+    state_parc = {"fase": "batidoras_parcial", "answers": {"batidoras_dia": 3}}
+    parte = main._combinar_decision_cierre(state_parc, "4:30", {})
+    assert parte["respuesta_valida"] is True
+    assert parte["_horas_parciales"] == [4.5]
+    ninguna = main._combinar_decision_cierre(state_parc, "no", {})
+    assert ninguna["_horas_parciales"] == []
+    de_mas = main._combinar_decision_cierre(
+        {"fase": "batidoras_parcial", "answers": {"batidoras_dia": 4}},
+        "4 y 2,5",
+        {},
+    )
+    assert de_mas["respuesta_valida"] is False
+    assert str(main.NUM_BATIDORAS) in de_mas["mensaje"]
+    vacio = main._combinar_decision_cierre(
+        {"fase": "batidoras_parcial", "answers": {"batidoras_dia": 0}},
+        "no",
+        {},
+    )
+    assert vacio["respuesta_valida"] is False
+
+
+def test_la_meta_depende_de_las_batidoras_efectivas():
+    # Sin datos de batidoras: tiempo de reloj / batidas y meta de 30.
+    base = main.calcular_tiempo_por_batida("7:00 am", "12:40 pm", 12)
+    assert base["total_min"] == 340
+    assert base["promedio"] == 340 / 12
+    assert base["meta"] == 30
+    assert "num_batidoras" not in base
+    assert "Pausa" not in main.formatear_calculo_batidas(base)
+    assert "Meta (CMI)" in main.formatear_calculo_batidas(base)
+
+    assert main.meta_para_batidoras(4) == 30
+    assert main.meta_para_batidoras(3) == 40
+    assert main.meta_para_batidoras(2) == 60
+
+    cuatro = main.calcular_tiempo_por_batida("7:00 am", "12:40 pm", 12, num_batidoras=4)
+    assert cuatro["total_min"] == 340
+    assert cuatro["num_batidoras"] == 4
+    assert cuatro["promedio"] == 340 / 12
+    assert cuatro["meta"] == 30
+    assert cuatro["cumplio"] is True
+    texto_cuatro = main.formatear_calculo_batidas(cuatro)
+    assert "Tiempo total: 5 h 40 min" in texto_cuatro
+    assert "Pausa" not in texto_cuatro
+    assert "Batidoras: 4 todo el día (equivale a 4,0)" in texto_cuatro
+    assert "28,3 min por batida" in texto_cuatro
+    assert "Meta: **30,0 min**" in texto_cuatro
+    assert cuatro["n_ef"] == 4
+
+    tres = main.calcular_tiempo_por_batida("7:00 am", "12:40 pm", 12, num_batidoras=3)
+    assert tres["promedio"] == 340 / 12
+    assert tres["meta"] == 40
+    assert tres["cumplio"] is True
+    texto_tres = main.formatear_calculo_batidas(tres)
+    assert "Batidoras: 3 todo el día (equivale a 3,0)" in texto_tres
+    assert "28,3 min por batida" in texto_tres
+    assert "Meta: **40,0 min**" in texto_tres
+    assert tres["n_ef"] == 3
+
+    # 36 min queda por encima de 30 y dentro de la meta de 40.
+    justo = main.calcular_tiempo_por_batida("7:00 am", "1:00 pm", 10, num_batidoras=3)
+    assert justo["promedio"] == 36
+    assert justo["meta"] == 40
+    assert justo["cumplio"] is True
+    assert "4,0 min por debajo" in main.formatear_calculo_batidas(justo)
+    con_cuatro = main.calcular_tiempo_por_batida("7:00 am", "1:00 pm", 10, num_batidoras=4)
+    assert con_cuatro["cumplio"] is False
+    assert con_cuatro["meta"] == 30
+
+    dos = main.calcular_tiempo_por_batida("7:00 am", "12:40 pm", 12, num_batidoras=2)
+    assert dos["promedio"] == 340 / 12
+    assert dos["meta"] == 60
+    assert dos["n_ef"] == 2
+    assert "Meta: **60,0 min**" in main.formatear_calculo_batidas(dos)
+
+    ninguna = main.calcular_tiempo_por_batida(
+        "7:00 am", "12:40 pm", 12, num_batidoras=0, horas_parciales=[]
+    )
+    assert ninguna["ok"] is False
+    assert "ninguna batidora" in ninguna["mensaje"]
+    de_mas = main.calcular_tiempo_por_batida(
+        "7:00 am", "12:40 pm", 12, num_batidoras=5, horas_parciales=[4]
+    )
+    assert de_mas["ok"] is False
+    assert "más de 5" in de_mas["mensaje"]
+
+
+def test_ejemplo_batidoras_parciales():
+    """7:00–12:40, 12 batidas. El día efectivo es el reloj completo: 5 h 40 min."""
+    dia_h = 340 / 60
+
+    def calc(dia, horas):
+        return main.calcular_tiempo_por_batida(
+            "7:00 am",
+            "12:40 pm",
+            12,
+            num_batidoras=dia,
+            horas_parciales=horas,
+        )
+
+    cuatro = calc(4, [])
+    assert cuatro["promedio"] == 340 / 12
+    assert cuatro["n_ef"] == 4
+    assert cuatro["meta"] == 30
+    assert "equivale a 4,0" in main.formatear_calculo_batidas(cuatro)
+
+    tres = calc(3, [])
+    assert tres["n_ef"] == 3
+    assert tres["promedio"] == cuatro["promedio"]
+    assert tres["meta"] == 40
+
+    parcial = calc(3, [4])
+    assert abs(parcial["n_ef"] - (3 + 4 / dia_h)) < 1e-9
+    assert main._fmt_un_decimal(parcial["n_ef"]) == "3,7"
+    assert parcial["meta"] == 32.4
+    assert parcial["promedio"] == 340 / 12
+    texto = main.formatear_calculo_batidas(parcial)
+    assert "Batidoras: 3 todo el día + 1 por 4 h (equivale a 3,7)" in texto
+    assert "Meta: **32,4 min**" in texto
+    assert "28,3 min por batida" in texto
+
+    solo = calc(0, [4])
+    assert abs(solo["n_ef"] - (4 / dia_h)) < 1e-9
+    assert main._fmt_un_decimal(solo["n_ef"]) == "0,7"
+    assert solo["meta"] == 170
+    assert solo["promedio"] == 340 / 12
+    texto_solo = main.formatear_calculo_batidas(solo)
+    assert "Batidoras: 0 todo el día + 1 por 4 h (equivale a 0,7)" in texto_solo
+    assert "Meta: **170,0 min**" in texto_solo
+
+    # 4:30 son 4,5 h. Una de 8 h se recorta al día neto y cuenta como 1.
+    media = calc(0, ["4:30"])
+    assert abs(media["n_ef"] - (4.5 / dia_h)) < 1e-9
+    assert "1 por 4,5 h" in main.formatear_calculo_batidas(media)
+    capada = calc(0, [8])
+    una = calc(1, [])
+    assert abs(capada["n_ef"] - 1) < 1e-9
+    assert capada["meta"] == una["meta"] == 120
+
+
 def test_combinar_no_repite_si_ya_hay_hora():
     state = {"fase": "hora_llegada", "answers": {}}
     decision = main._combinar_decision_cierre(

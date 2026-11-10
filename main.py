@@ -32,7 +32,8 @@ client = OpenAI(
 #   "user_id": int,
 #   "batidora": 1..5,
 #   "fase": "hora" | "checklist" | "video" | "funcionamiento"
-#           | "agua_sal" | "limpieza" | "hora_llegada" | "batidas" | "hora_culminacion",
+#           | "agua_sal" | "limpieza" | "hora_llegada" | "batidas"
+#           | "hora_culminacion" | "batidoras_dia" | "batidoras_parcial",
 #   "buffer": str,
 #   "answers": {...},
 #   "videos_usados": [filename o url, ...],  # evita reutilizar el mismo video en 2 batidoras
@@ -41,8 +42,14 @@ client = OpenAI(
 conversation_state = {}
  
 NUM_BATIDORAS = 5
-# Meta CMI: minutos de reloj (llegada → fin, limpieza incluida) por batida.
+# Meta CMI con 4 batidoras a tiempo completo: 30 min por batida.
+# Promedio = tiempo de reloj (llegada → culminación) / batidas. No se resta pausa:
+# la meta de 30 min salió de promedios históricos que ya incluyen las pausas normales.
+# N efectivo = las de todo el día + (horas parciales / horas de reloj).
+# Cada tramo parcial se recorta a ese reloj. Meta = 30 × 4 / N efectivo, a 1 decimal.
+# El tope de máquinas (día completo + parciales) es NUM_BATIDORAS.
 META_MIN_POR_BATIDA = 30
+BATIDORAS_REF_PROMEDIO = 4
  
 # ================== TEXTOS ==================
 TXT_CHECKLIST_ENCENDIDO = (
@@ -87,6 +94,8 @@ FASES_CIERRE_APAGADO = (
     "hora_llegada",
     "batidas",
     "hora_culminacion",
+    "batidoras_dia",
+    "batidoras_parcial",
 )
 
 PREGUNTAS_CIERRE = {
@@ -111,6 +120,14 @@ PREGUNTAS_CIERRE = {
     "hora_culminacion": (
         "🏁 **Hora de culminación.** ¿A qué hora terminaron **todo** el trabajo de "
         "producción de hoy, incluida la limpieza? (ejemplo: *12:40 pm*)"
+    ),
+    "batidoras_dia": (
+        "⚙️ **Batidoras.** ¿Cuántas batidoras trabajaron todo el día?"
+    ),
+    "batidoras_parcial": (
+        "⚙️ **Parte del día.** ¿Alguna batidora trabajó solo una parte del día? "
+        "Si sí, ¿cuántas horas trabajó cada una? "
+        "(ej: *4*, o *4 y 2,5*; *0* o *no* si ninguna)"
     ),
 }
 
@@ -414,13 +431,32 @@ def formatear_hora_12(minutos: int) -> str:
 
 
 def _fmt_duracion(minutos: float) -> str:
-    total = max(0, int(round(minutos)))
+    valor = float(minutos)
+    if abs(valor - round(valor)) > 1e-6:
+        valor = max(0.0, valor)
+        horas = int(valor // 60)
+        resto = valor - horas * 60
+        resto_txt = _fmt_un_decimal(resto)
+        if horas and resto > 1e-9:
+            return f"{horas} h {resto_txt} min"
+        if horas:
+            return f"{horas} h"
+        return f"{resto_txt} min"
+    total = max(0, int(round(valor)))
     h, m = divmod(total, 60)
     if h and m:
         return f"{h} h {m} min"
     if h:
         return f"{h} h"
     return f"{m} min"
+
+
+def _numero_limpio(valor: float):
+    """30.0 → 30, para no guardar 30.0 cuando el dato es entero."""
+    numero = float(valor)
+    if numero.is_integer():
+        return int(numero)
+    return numero
 
 
 def _fmt_un_decimal(valor: float) -> str:
@@ -465,11 +501,237 @@ def _como_batidas(valor):
     return extraer_entero_positivo(str(valor))
 
 
-def calcular_tiempo_por_batida(llegada: str, culminacion: str, batidas) -> dict:
-    """Promedio de minutos de reloj por batida. La cuenta es solo Python."""
+def _unico_valor_numerico(texto_norm: str) -> float | None:
+    """Un solo número (dígitos con coma o punto, o una palabra). None si hay dos distintos."""
+    encontrados = [float(n.replace(",", ".")) for n in re.findall(r"\d+(?:[.,]\d+)?", texto_norm)]
+    resto = texto_norm
+    for word, val in sorted(_PALABRAS_NUM.items(), key=lambda kv: -len(kv[0])):
+        if val > 0 and re.search(rf"\b{word}\b", resto):
+            encontrados.append(float(val))
+            resto = re.sub(rf"\b{word}\b", " ", resto, count=1)
+    if not encontrados:
+        return None
+    unicos = set(encontrados)
+    if len(unicos) != 1:
+        return None
+    return unicos.pop()
+
+
+def _ultima_linea(texto: str) -> str:
+    lineas = [ln.strip() for ln in (texto or "").splitlines() if ln.strip()]
+    return lineas[-1] if lineas else ""
+
+
+_DIA_CERO = {
+    "0",
+    "0.0",
+    "0,0",
+    "cero",
+    "nada",
+    "ninguna",
+    "ninguno",
+    "no",
+    "nop",
+    "nel",
+    "nope",
+}
+
+_PARCIAL_CERO = _DIA_CERO | {
+    "sin",
+    "ninguna batidora",
+    "no ninguna",
+    "sin ninguna",
+    "no trabajo",
+    "no trabajo ninguna",
+}
+
+
+def parsear_batidoras_dia(texto: str) -> int | None:
+    """Cuántas trabajaron el día completo: entero de 0 a NUM_BATIDORAS."""
+    t = re.sub(r"\s+", " ", _norm_es(texto or "")).strip(" .,;")
+    if not t:
+        return None
+    if t in _DIA_CERO or re.fullmatch(
+        r"(no|ninguna|ninguno|cero|nada)(\s+batidoras?)?", t
+    ):
+        return 0
+    if re.search(r"\d+[.,]\d+", t):
+        return None
+    n = _unico_valor_numerico(t)
+    if n is None or not float(n).is_integer():
+        return None
+    n_int = int(n)
+    if 0 <= n_int <= NUM_BATIDORAS:
+        return n_int
+    return None
+
+
+def parsear_num_batidoras(texto: str) -> int | None:
+    """Alias del conteo de todo el día. 0 es válido."""
+    return parsear_batidoras_dia(texto)
+
+
+def _palabras_a_digitos(texto: str) -> str:
+    resto = texto
+    for word, val in sorted(_PALABRAS_NUM.items(), key=lambda kv: -len(kv[0])):
+        if val <= 0:
+            continue
+        resto = re.sub(rf"\b{word}\b", str(val), resto)
+    return resto
+
+
+def parsear_horas_parciales(texto: str) -> list | None:
+    """
+    Horas de cada batidora que no trabajó el día completo.
+    [] si dijeron que ninguna. None si no se entiende.
+    Acepta 4, 2,5, 2.5 y 4:30 (4 h 30 min).
+    """
+    t = re.sub(r"\s+", " ", _norm_es(texto or "")).strip(" .,;")
+    if not t:
+        return None
+    if t in _PARCIAL_CERO or re.fullmatch(
+        r"(no|sin|ninguna|ninguno|cero|nada)(\s+batidoras?)?", t
+    ):
+        return []
+    if re.search(r"-\s*\d", t):
+        return None
+    t = _palabras_a_digitos(t)
+    tokens = re.findall(r"\d{1,2}:\d{1,2}|\d+(?:[.,]\d+)?", t)
+    if not tokens:
+        return None
+    horas = []
+    for tok in tokens:
+        if ":" in tok:
+            horas_txt, min_txt = tok.split(":", 1)
+            h = int(horas_txt)
+            m = int(min_txt)
+            if m >= 60:
+                return None
+            valor = h + m / 60.0
+        else:
+            valor = float(tok.replace(",", "."))
+        if valor <= 0 or valor > 24:
+            return None
+        horas.append(_numero_limpio(valor))
+    return horas
+
+
+def _como_batidoras_dia(valor) -> int | None:
+    if isinstance(valor, bool) or valor is None:
+        return None
+    if isinstance(valor, int):
+        n = valor
+    elif isinstance(valor, float):
+        if not valor.is_integer():
+            return None
+        n = int(valor)
+    else:
+        return parsear_batidoras_dia(str(valor))
+    if 0 <= n <= NUM_BATIDORAS:
+        return n
+    return None
+
+
+def _como_num_batidoras(valor) -> int | None:
+    return _como_batidoras_dia(valor)
+
+
+def _como_horas_parciales(valor) -> list | None:
+    if valor is None:
+        return None
+    if isinstance(valor, str):
+        return parsear_horas_parciales(valor)
+    if isinstance(valor, (int, float)) and not isinstance(valor, bool):
+        return _horas_desde_numero(valor)
+    if isinstance(valor, (list, tuple)):
+        horas = []
+        for item in valor:
+            if isinstance(item, bool):
+                return None
+            if isinstance(item, str):
+                parsed = parsear_horas_parciales(item)
+                if parsed is None:
+                    return None
+                horas.extend(parsed)
+                continue
+            una = _horas_desde_numero(item)
+            if una is None:
+                return None
+            horas.extend(una)
+        return horas
+    return None
+
+
+def _horas_desde_numero(valor) -> list | None:
+    try:
+        h = float(valor)
+    except (TypeError, ValueError):
+        return None
+    if h != h or h in (float("inf"), float("-inf")) or h <= 0 or h > 24:
+        return None
+    return [_numero_limpio(h)]
+
+
+def meta_para_batidoras(n_ef: float):
+    """Meta a 1 decimal: 30 × 4 / batidoras efectivas."""
+    n = float(n_ef)
+    if n <= 0:
+        return None
+    return float(f"{META_MIN_POR_BATIDA * BATIDORAS_REF_PROMEDIO / n:.1f}")
+
+
+def _texto_batidoras_efectivas(dia: int, horas: list, n_ef: float) -> str:
+    grupos = []
+    conteo = {}
+    for h in horas:
+        clave = _fmt_horas_trabajadas(h)
+        if clave not in conteo:
+            grupos.append(clave)
+            conteo[clave] = 0
+        conteo[clave] += 1
+    trozos = []
+    for clave in grupos:
+        c = conteo[clave]
+        trozos.append(f"1 por {clave}" if c == 1 else f"{c} por {clave}")
+    parcial = " y ".join(trozos)
+    if parcial:
+        detalle = f"{int(dia)} todo el día + {parcial}"
+    else:
+        detalle = f"{int(dia)} todo el día"
+    return f"{detalle} (equivale a {_fmt_un_decimal(n_ef)})"
+
+
+def _fmt_horas_trabajadas(horas: float) -> str:
+    if float(horas).is_integer():
+        return f"{int(horas)} h"
+    return f"{_fmt_un_decimal(horas)} h"
+
+
+def calcular_tiempo_por_batida(
+    llegada: str,
+    culminacion: str,
+    batidas,
+    num_batidoras: int | None = None,
+    horas_parciales=None,
+) -> dict:
+    """
+    Promedio de minutos por batida. La cuenta es solo Python.
+
+    Promedio = (culminación − llegada) / batidas. No se resta ninguna pausa.
+    Sin datos de batidoras, la meta es 30.
+    Con datos: N efectivo = día completo + horas parciales / horas de reloj
+    (cada parcial se recorta a ese reloj) y la meta es 30 × 4 / N efectivo.
+    """
     t0 = parsear_hora_minutos(str(llegada or ""))
     t1 = parsear_hora_minutos(str(culminacion or ""), llegada_min=t0)
     n = _como_batidas(batidas)
+    batidoras_explicitas = num_batidoras is not None or horas_parciales is not None
+    if not batidoras_explicitas:
+        dia = None
+        horas = None
+    else:
+        dia = _como_batidoras_dia(0 if num_batidoras is None else num_batidoras)
+        horas = [] if horas_parciales is None else _como_horas_parciales(horas_parciales)
     if t0 is None and t1 is None:
         return {
             "ok": False,
@@ -493,6 +755,27 @@ def calcular_tiempo_por_batida(llegada: str, culminacion: str, batidas) -> dict:
         razones.append("la hora de culminación no es posterior a la de llegada")
     if n is None:
         razones.append("el número de batidas no es válido")
+    if batidoras_explicitas and dia is None:
+        razones.append("el número de batidoras de todo el día no es válido")
+    if batidoras_explicitas and horas is None:
+        razones.append("las horas de las batidoras parciales no son válidas")
+    if (
+        batidoras_explicitas
+        and dia is not None
+        and horas is not None
+        and dia + len(horas) > NUM_BATIDORAS
+    ):
+        razones.append(
+            f"son más de {NUM_BATIDORAS} batidoras "
+            "(las del día completo más las que trabajaron solo una parte)"
+        )
+    if (
+        batidoras_explicitas
+        and dia is not None
+        and horas is not None
+        and dia + len(horas) == 0
+    ):
+        razones.append("no quedó ninguna batidora en uso")
     if razones:
         return {
             "ok": False,
@@ -503,31 +786,76 @@ def calcular_tiempo_por_batida(llegada: str, culminacion: str, batidas) -> dict:
         }
     total = t1 - t0
     promedio = total / n
-    return {
+    n_ef = None
+    horas_contadas = None
+    if batidoras_explicitas:
+        dia_h = total / 60.0
+        horas_contadas = [_numero_limpio(min(float(h), dia_h)) for h in horas]
+        suma = sum(float(h) for h in horas_contadas)
+        n_ef = dia + (suma / dia_h if dia_h else 0.0)
+        if n_ef <= 1e-9:
+            return {
+                "ok": False,
+                "mensaje": (
+                    "No pude calcular el tiempo por batida: "
+                    "no quedó ninguna batidora en uso."
+                ),
+                "llegada_min": t0,
+                "culminacion_min": t1,
+                "batidas": n,
+            }
+        meta = meta_para_batidoras(n_ef)
+    else:
+        meta = META_MIN_POR_BATIDA
+    resultado = {
         "ok": True,
         "llegada_min": t0,
         "culminacion_min": t1,
         "total_min": total,
         "batidas": n,
         "promedio": promedio,
-        "cumplio": promedio <= META_MIN_POR_BATIDA + 1e-9,
+        "meta": meta,
+        "cumplio": promedio <= float(meta) + 1e-9,
     }
+    if batidoras_explicitas:
+        resultado["batidoras_dia"] = dia
+        resultado["num_batidoras"] = dia
+        resultado["horas_parciales"] = horas_contadas
+        resultado["n_ef"] = n_ef
+    return resultado
 
 
 def formatear_calculo_batidas(calc: dict) -> str:
     if not calc or not calc.get("ok"):
         motivo = (calc or {}).get("mensaje") or "No pude calcular el tiempo por batida."
         return f"📊 **Cálculo de tiempo por batida**\n{motivo}"
-    diff = META_MIN_POR_BATIDA - calc["promedio"]
+    meta = calc.get("meta", META_MIN_POR_BATIDA)
+    diff = float(meta) - calc["promedio"]
     lineas = [
         "📊 **Cálculo de tiempo por batida**",
         f"• Llegada: {formatear_hora_12(calc['llegada_min'])}",
         f"• Culminación: {formatear_hora_12(calc['culminacion_min'])}",
         f"• Tiempo total: {_fmt_duracion(calc['total_min'])}",
         f"• Batidas: {calc['batidas']}",
-        f"• Promedio: **{_fmt_un_decimal(calc['promedio'])} min por batida**",
-        f"• Meta (CMI): **{META_MIN_POR_BATIDA} min por batida o menos**",
     ]
+    if "n_ef" in calc:
+        lineas.append(
+            "• Batidoras: "
+            + _texto_batidoras_efectivas(
+                calc.get("batidoras_dia", 0),
+                calc.get("horas_parciales") or [],
+                calc["n_ef"],
+            )
+        )
+        linea_meta = f"• Meta: **{_fmt_un_decimal(meta)} min**"
+    else:
+        linea_meta = f"• Meta (CMI): **{META_MIN_POR_BATIDA} min por batida o menos**"
+    lineas.extend(
+        [
+            f"• Promedio: **{_fmt_un_decimal(calc['promedio'])} min por batida**",
+            linea_meta,
+        ]
+    )
     if calc.get("cumplio"):
         lineas.append(
             f"✅ **Cumplieron la meta** ({_fmt_margen(diff)} min por debajo)."
@@ -928,6 +1256,63 @@ def _combinar_decision_cierre(state: dict, texto: str, decision: dict) -> dict:
         decision["_batidas"] = n
         return decision
 
+    if fase == "batidoras_dia":
+        n_bat = parsear_batidoras_dia(texto)
+        if n_bat is None:
+            ultima = _ultima_linea(texto)
+            if ultima and ultima != (texto or "").strip():
+                n_bat = parsear_batidoras_dia(ultima)
+        if n_bat is None:
+            decision["respuesta_valida"] = False
+            decision["mensaje"] = (
+                "Dime cuántas batidoras trabajaron todo el día, con un número del 0 al "
+                f"{NUM_BATIDORAS}. Si ninguna, escribe 0."
+            )
+            return decision
+        decision["respuesta_valida"] = True
+        decision["mensaje"] = None
+        decision["_batidoras_dia"] = n_bat
+        return decision
+
+    if fase == "batidoras_parcial":
+        horas = parsear_horas_parciales(texto)
+        if horas is None:
+            ultima = _ultima_linea(texto)
+            if ultima and ultima != (texto or "").strip():
+                horas = parsear_horas_parciales(ultima)
+        if horas is None:
+            decision["respuesta_valida"] = False
+            decision["mensaje"] = (
+                "Dime las horas de cada batidora que trabajó solo una parte del día. "
+                "Ejemplo: 4, o 4 y 2,5, o 4:30. Si ninguna, escribe 0 o no."
+            )
+            return decision
+        dia = (state.get("answers") or {}).get("batidoras_dia")
+        if dia is None:
+            dia = (state.get("answers") or {}).get("num_batidoras")
+        try:
+            dia = int(dia)
+        except (TypeError, ValueError):
+            dia = 0
+        if dia + len(horas) > NUM_BATIDORAS:
+            decision["respuesta_valida"] = False
+            decision["mensaje"] = (
+                f"En total no pueden ser más de {NUM_BATIDORAS} batidoras "
+                "(las del día completo más las que trabajaron solo una parte)."
+            )
+            return decision
+        if dia + len(horas) == 0:
+            decision["respuesta_valida"] = False
+            decision["mensaje"] = (
+                "Tiene que haber trabajado al menos una batidora, todo el día o una parte. "
+                "Si ninguna trabajó el día completo, dime las horas de la que sí trabajó."
+            )
+            return decision
+        decision["respuesta_valida"] = True
+        decision["mensaje"] = None
+        decision["_horas_parciales"] = horas
+        return decision
+
     return decision
 
 
@@ -1101,6 +1486,8 @@ async def _cerrar_apagado(message: discord.Message, state: dict):
         state["answers"].get("hora_llegada") or "",
         state["answers"].get("hora_culminacion") or "",
         state["answers"].get("batidas"),
+        num_batidoras=state["answers"].get("batidoras_dia"),
+        horas_parciales=state["answers"].get("batidoras_parciales"),
     )
     guardado = {"ok": bool(calc.get("ok"))}
     if calc.get("ok"):
@@ -1110,7 +1497,14 @@ async def _cerrar_apagado(message: discord.Message, state: dict):
                 "culminacion_24h": minutos_a_hhmm(calc["culminacion_min"]),
                 "total_min": calc["total_min"],
                 "batidas": calc["batidas"],
+                "batidoras_dia": calc.get("batidoras_dia", calc.get("num_batidoras")),
+                "horas_parciales": calc.get("horas_parciales", []),
+                "n_ef": (
+                    float(f"{calc['n_ef']:.1f}") if calc.get("n_ef") is not None else None
+                ),
+                "num_batidoras": calc.get("num_batidoras"),
                 "promedio_min": round(calc["promedio"], 1),
+                "meta_min": calc.get("meta", META_MIN_POR_BATIDA),
                 "cumplio": bool(calc["cumplio"]),
             }
         )
@@ -1168,6 +1562,13 @@ async def _avanzar_cierre_apagado(
         state["answers"]["hora_culminacion_24h"] = (
             minutos_a_hhmm(mins) if mins is not None else None
         )
+    elif fase == "batidoras_dia":
+        state["answers"]["batidoras_dia_texto"] = buffer_completo
+        state["answers"]["batidoras_dia"] = decision.get("_batidoras_dia")
+        state["answers"]["num_batidoras"] = decision.get("_batidoras_dia")
+    elif fase == "batidoras_parcial":
+        state["answers"]["batidoras_parcial_texto"] = buffer_completo
+        state["answers"]["batidoras_parciales"] = decision.get("_horas_parciales") or []
         state["buffer"] = ""
         await _cerrar_apagado(message, state)
         return
@@ -1596,6 +1997,23 @@ async def manejar_respuesta(message: discord.Message):
         await message.channel.send(
             "Escribe la respuesta en texto (sí o no, la hora o el número)."
         )
+        return
+
+    # El número de batidoras y las horas parciales se resuelven en código.
+    if fase in {"batidoras_dia", "batidoras_parcial"}:
+        buffer_prev = state.get("buffer") or ""
+        buffer_completo = (buffer_prev + "\n" + texto).strip() if buffer_prev else texto
+        decision = _combinar_decision_cierre(state, buffer_completo, {})
+        if not decision.get("respuesta_valida", False):
+            state["buffer"] = buffer_completo
+            msg = decision.get("mensaje") or "Falta un dato. Completa solo lo que falta."
+            await message.channel.send(msg)
+            return
+        try:
+            await message.add_reaction("✅")
+        except Exception:
+            pass
+        await _avanzar_cierre_apagado(message, state, buffer_completo, decision)
         return
  
     respuesta_para_ia = texto
