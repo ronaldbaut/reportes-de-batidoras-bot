@@ -1354,10 +1354,15 @@ def _texto_fuera_de_servicio(texto: str) -> bool:
             r"|\bno\s+lo\s+us\w*"
             r"|\bsin\s+uso\b"
             r"|\ben\s+reparacion\b"
+            r"|\breparacion\b"
+            r"|\bmantenimiento\b"
             r"|\bfuera\s+de\s+servicio\b"
+            r"|\bno\s+sirve\b"
+            r"|\bmecanico\b"
             r"|(?<!no )(?<!no esta )\bdanad[ao]s?\b"
             r"|(?<!no )se\s+dan\w*"
             r"|(?<!no )(?<!no esta )\bparad[ao]s?\b"
+            r"|(?<!no )(?<!no esta )\brot[ao]s?\b"
             r"|(?<!no )(?:esta|quedo|queda|dejo|dejamos|sigue)\s+apagad[ao]s?\b",
             t,
         )
@@ -1991,6 +1996,133 @@ Evalúa BUFFER + respuesta nueva juntos.
         }
  
  
+# ================== ¿TRABAJÓ HOY? (ANTES DEL VIDEO) ==================
+def _motivo_corto(texto: str) -> str:
+    t = re.sub(r"\s+", " ", (texto or "").strip())
+    if not t:
+        return "No, está en reparación o parada"
+    if len(t) > 180:
+        return t[:177] + "…"
+    return t
+
+
+def _respuesta_si_trabajo(texto: str) -> bool:
+    if _texto_fuera_de_servicio(texto):
+        return False
+    t = re.sub(r"\s+", " ", _norm_es(texto)).strip(" .,;:!")
+    return bool(
+        re.fullmatch(
+            r"(si|sip|sep|simon|claro|si trabajo|si trabajo hoy|si trabaj[oó])",
+            t,
+        )
+    )
+
+
+class _Envio:
+    """Para reutilizar _ir_siguiente cuando el origen es un botón."""
+
+    def __init__(self, channel):
+        self.channel = channel
+
+
+async def _registrar_fuera_y_seguir(channel, state: dict, motivo: str):
+    tipo = state["tipo"]
+    bat = state["batidora"]
+    motivo = _motivo_corto(motivo)
+    state["answers"][f"{tipo}_bat{bat}_checklist"] = (
+        state["answers"].get(f"{tipo}_bat{bat}_checklist") or motivo
+    )
+    state["answers"][f"{tipo}_bat{bat}_trabajo"] = "no"
+    state["answers"][f"{tipo}_bat{bat}_video"] = (
+        f"N/A — fuera de servicio / no usada: {motivo}"
+    )
+    state["buffer"] = ""
+    await channel.send(
+        f"Batidora {bat} marcada como **no en uso / fuera de servicio** "
+        f"({motivo}). No pido video. Siguiente…"
+    )
+    await _ir_siguiente_batidora_o_fin(_Envio(channel), state)
+
+
+async def _pedir_video(channel, state: dict):
+    bat = state["batidora"]
+    state["fase"] = "video"
+    state["buffer"] = ""
+    state["answers"][f"{state['tipo']}_bat{bat}_trabajo"] = "si"
+    await channel.send(TXT_VIDEO.format(bat=bat))
+
+
+async def _pedir_pregunta_trabajo(channel, state: dict):
+    bat = state["batidora"]
+    state["fase"] = "trabajo_hoy"
+    state["buffer"] = ""
+    await channel.send(
+        f"¿La **batidora {bat}** trabajó hoy?",
+        view=TrabajoHoyView(str(channel.id), bat),
+    )
+
+
+class TrabajoHoyView(discord.ui.View):
+    """Sí pide el video. No la deja fuera de servicio y pasa a la siguiente."""
+
+    def __init__(self, channel_id: str, bat: int):
+        super().__init__(timeout=None)
+        self.channel_id = str(channel_id)
+        self.bat = int(bat)
+        si = discord.ui.Button(
+            label="Sí, trabajó",
+            style=discord.ButtonStyle.success,
+            custom_id=f"bat-trabajo:{self.channel_id}:{bat}:si",
+        )
+        no = discord.ui.Button(
+            label="No, está en reparación o parada",
+            style=discord.ButtonStyle.danger,
+            custom_id=f"bat-trabajo:{self.channel_id}:{bat}:no",
+        )
+        si.callback = self._si
+        no.callback = self._no
+        self.add_item(si)
+        self.add_item(no)
+
+    async def _si(self, interaction: discord.Interaction):
+        await self._resolver(interaction, True)
+
+    async def _no(self, interaction: discord.Interaction):
+        await self._resolver(interaction, False)
+
+    async def _resolver(self, interaction: discord.Interaction, trabajo: bool):
+        channel = interaction.channel
+        cid = str(channel.id)
+        state = conversation_state.get(cid)
+        if (
+            not state
+            or state.get("fase") != "trabajo_hoy"
+            or int(state.get("batidora") or 0) != self.bat
+        ):
+            await interaction.response.send_message(
+                "Esa pregunta ya no está activa.", ephemeral=True
+            )
+            return
+        if interaction.user.id != state["user_id"]:
+            await interaction.response.send_message(
+                "Solo quien abrió el reporte puede responder.", ephemeral=True
+            )
+            return
+        for child in self.children:
+            child.disabled = True
+        try:
+            await interaction.response.edit_message(view=self)
+        except Exception:
+            if not interaction.response.is_done():
+                await interaction.response.defer()
+        if trabajo:
+            await _pedir_video(channel, state)
+        else:
+            await _registrar_fuera_y_seguir(
+                channel, state, "No, está en reparación o parada"
+            )
+
+
 # ================== MANEJO ==================
 async def manejar_respuesta(message: discord.Message):
     channel_id = str(message.channel.id)
@@ -2004,8 +2136,12 @@ async def manejar_respuesta(message: discord.Message):
     bat = state["batidora"]
     tipo = state["tipo"]
  
-    # ---- FASE VIDEO: exigir media de verdad ----
+    # ---- FASE VIDEO: si el texto dice que no trabaja, no seguir pidiendo el video ----
     if fase == "video":
+        dicho = ((state.get("buffer") or "") + "\n" + texto).strip()
+        if not tiene_media and _texto_fuera_de_servicio(dicho):
+            await _registrar_fuera_y_seguir(message.channel, state, dicho)
+            return
         if not tiene_media:
             if _vacio_o_basura(texto, False):
                 await message.channel.send(
@@ -2013,9 +2149,9 @@ async def manejar_respuesta(message: discord.Message):
                     f"Graba y envíalo aquí."
                 )
             else:
-                # Texto sin video: no avanzar
                 await message.channel.send(
-                    f"Anota eso, pero aún falta el **video del piñón de la batidora {bat}**. Envíalo por favor."
+                    f"Anota eso, pero aún falta el **video del piñón de la batidora {bat}**. "
+                    f"Si no trabajó, escribe *en reparación* o *no* y seguimos sin video."
                 )
                 if texto:
                     state["buffer"] = ((state.get("buffer") or "") + "\n" + texto).strip()
@@ -2047,6 +2183,27 @@ async def manejar_respuesta(message: discord.Message):
         await _ir_siguiente_batidora_o_fin(message, state)
         return
  
+    if fase == "trabajo_hoy":
+        if _respuesta_si_trabajo(texto):
+            try:
+                await message.add_reaction("✅")
+            except Exception:
+                pass
+            await _pedir_video(message.channel, state)
+            return
+        if _texto_fuera_de_servicio(texto):
+            try:
+                await message.add_reaction("✅")
+            except Exception:
+                pass
+            await _registrar_fuera_y_seguir(message.channel, state, texto)
+            return
+        await message.channel.send(
+            "Responde **Sí** o **No** con los botones, o escribe *sí* / *no* / *en reparación*."
+        )
+        await _pedir_pregunta_trabajo(message.channel, state)
+        return
+
     # ---- Prefiltro basura (no video) ----
     if _vacio_o_basura(texto, tiene_media):
         # En limpieza, el segundo intento cuenta aunque sea corto ("ok", "no").
@@ -2115,23 +2272,12 @@ async def manejar_respuesta(message: discord.Message):
     # Aunque el modelo pida más checklist, si dijeron que no trabaja no hay video.
     # La marca del modelo sola no alcanza: la batidora 4 se saltaba por error.
     if fase == "checklist" and _texto_fuera_de_servicio(buffer_completo):
-        motivo = re.sub(r"\s+", " ", buffer_completo).strip()
-        if len(motivo) > 180:
-            motivo = motivo[:177] + "…"
         state["answers"][f"{tipo}_bat{bat}_checklist"] = buffer_completo
-        state["answers"][f"{tipo}_bat{bat}_video"] = (
-            f"N/A — fuera de servicio / no usada: {motivo}"
-        )
-        state["buffer"] = ""
         try:
             await message.add_reaction("✅")
         except Exception:
             pass
-        await message.channel.send(
-            f"Batidora {bat} marcada como **no en uso / fuera de servicio** "
-            f"({motivo}). No pido video. Siguiente…"
-        )
-        await _ir_siguiente_batidora_o_fin(message, state)
+        await _registrar_fuera_y_seguir(message.channel, state, buffer_completo)
         return
 
     if not decision.get("respuesta_valida", False):
@@ -2181,10 +2327,7 @@ async def manejar_respuesta(message: discord.Message):
     if fase == "checklist":
         state["answers"][f"{tipo}_bat{bat}_checklist"] = buffer_completo
         state["buffer"] = ""
-
-        # Siempre pedir video si está en uso. Si no trabaja, ya se salió arriba.
-        state["fase"] = "video"
-        await message.channel.send(TXT_VIDEO.format(bat=bat))
+        await _pedir_pregunta_trabajo(message.channel, state)
         return
  
  
