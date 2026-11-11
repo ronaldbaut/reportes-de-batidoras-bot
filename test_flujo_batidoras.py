@@ -96,6 +96,22 @@ def test_false_en_texto_no_es_verdadero():
     assert main._texto_fuera_de_servicio("está en reparación") is True
     assert main._texto_fuera_de_servicio("la dejamos apagada") is True
     assert main._texto_fuera_de_servicio("apagado 12:00") is False
+    for frase in (
+        "no está trabajando",
+        "no trabajó",
+        "no se usó",
+        "está en reparación",
+        "dañada",
+        "parada",
+        "fuera de servicio",
+        "no funciona",
+        "sin uso hoy",
+        "no",
+    ):
+        assert main._texto_fuera_de_servicio(frase) is True, frase
+    assert main._texto_fuera_de_servicio("no está dañada") is False
+    assert main._texto_fuera_de_servicio("no está parada") is False
+    assert main._texto_fuera_de_servicio("el piñón no trabaja bien") is False
 
 
 def test_la_cuarta_no_se_salta_si_el_modelo_la_marca_fuera():
@@ -119,6 +135,38 @@ def test_la_cuarta_no_se_salta_si_el_modelo_la_marca_fuera():
 
     asyncio.run(caso("encendido_batidoras"))
     asyncio.run(caso("apagado_batidoras"))
+
+
+def test_si_no_trabaja_no_pide_video_y_guarda_el_motivo():
+    """Dos máquinas paradas: no hay video, queda el motivo y sigue la siguiente."""
+
+    async def correr():
+        frases = (
+            "no está trabajando",
+            "está en reparación",
+            "dañada",
+            "no se usó",
+            "sin uso hoy",
+            "parada",
+            "no",
+        )
+        for i, frase in enumerate(frases):
+            canal = await _ir_hasta("apagado_batidoras", 4 if i % 2 == 0 else 2)
+            # Aunque el modelo diga que el checklist está incompleto.
+            main.consultar_grok = _grok(False, valida=False)
+            antes = len(canal.mensajes)
+            await main.manejar_respuesta(_Msg(canal, frase))
+            nuevos = canal.mensajes[antes:]
+            assert not any("video del piñón" in m for m in nuevos), (frase, nuevos)
+            assert any("no en uso" in m and frase in m for m in nuevos), (frase, nuevos)
+            state = main.conversation_state[str(canal.id)]
+            bat = 4 if i % 2 == 0 else 2
+            guardado = state["answers"][f"apagado_batidoras_bat{bat}_video"]
+            assert "fuera de servicio" in guardado and frase in guardado
+            assert state["batidora"] == bat + 1
+            assert state["fase"] == "checklist"
+
+    asyncio.run(correr())
 
 
 def test_la_cuarta_fuera_de_servicio_si_pasa_a_la_quinta():
