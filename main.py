@@ -125,9 +125,9 @@ PREGUNTAS_CIERRE = {
         "⚙️ **Batidoras.** ¿Cuántas batidoras trabajaron todo el día?"
     ),
     "batidoras_parcial": (
-        "⚙️ **Parte del día.** ¿Alguna batidora trabajó solo una parte del día? "
-        "Si sí, ¿cuántas horas trabajó cada una? "
-        "(ej: *4*, o *4 y 2,5*; *0* o *no* si ninguna)"
+        "⚙️ **Parte del día.** ¿Hubo alguna batidora que no trabajó el día completo? "
+        "Escribe solo las horas que trabajó cada una, sin importar cuál fue. "
+        "Ejemplo: *4*, o *4 y 2,5*. Si todas trabajaron el día completo, escribe *NO*."
     ),
 }
 
@@ -1283,8 +1283,8 @@ def _combinar_decision_cierre(state: dict, texto: str, decision: dict) -> dict:
         if horas is None:
             decision["respuesta_valida"] = False
             decision["mensaje"] = (
-                "Dime las horas de cada batidora que trabajó solo una parte del día. "
-                "Ejemplo: 4, o 4 y 2,5, o 4:30. Si ninguna, escribe 0 o no."
+                "No entendí. Escribe solo números con las horas, por ejemplo 4, o 4 y 2,5. "
+                "Si todas trabajaron el día completo, escribe NO."
             )
             return decision
         dia = (state.get("answers") or {}).get("batidoras_dia")
