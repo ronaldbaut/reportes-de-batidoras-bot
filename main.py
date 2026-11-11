@@ -1330,23 +1330,34 @@ def _como_bool(valor) -> bool:
 
 def _texto_fuera_de_servicio(texto: str) -> bool:
     """
-    La máquina no se usó hoy. No basta con que el modelo lo diga:
-    en la batidora 4 confundía la regla 4 del prompt con la máquina.
+    La máquina no se usó hoy, dicho por la trabajadora.
+    No basta con que el modelo lo marque: en la batidora 4 confundía
+    la regla del prompt con la máquina y se saltaba una que sí trabajó.
+    Un «no» suelto sí cuenta; «no está floja» o «apagado 12:00» no.
     """
-    t = _norm_es(texto)
+    t = re.sub(r"\s+", " ", _norm_es(texto)).strip(" .,;:!")
     if not t:
         return False
+    if re.fullmatch(r"(no|nop|nel|nope|nada|ninguna|ninguno)(\s+hoy)?", t):
+        return True
     return bool(
         re.search(
             r"\bno\s+funcion\w*"
             r"|\bno\s+esta\s+en\s+(funcionamiento|uso|servicio)"
+            r"|\bno\s+esta\s+trabajando\b"
             r"|\bno\s+se\s+enciend\w*"
             r"|\bno\s+se\s+prend\w*"
             r"|\bno\s+enciend\w*"
             r"|\bno\s+trabaj\w*\b(?!\s+(bien|mal|igual|parejo))"
             r"|\bno\s+se\s+uso\b(?!\s+(grasa|aceite|sal|agua|bien))"
+            r"|\bno\s+la\s+us\w*"
+            r"|\bno\s+lo\s+us\w*"
+            r"|\bsin\s+uso\b"
             r"|\ben\s+reparacion\b"
             r"|\bfuera\s+de\s+servicio\b"
+            r"|(?<!no )(?<!no esta )\bdanad[ao]s?\b"
+            r"|(?<!no )se\s+dan\w*"
+            r"|(?<!no )(?<!no esta )\bparad[ao]s?\b"
             r"|(?<!no )(?:esta|quedo|queda|dejo|dejamos|sigue)\s+apagad[ao]s?\b",
             t,
         )
@@ -2101,6 +2112,28 @@ async def manejar_respuesta(message: discord.Message):
     if fase in FASES_CIERRE_APAGADO:
         decision = _combinar_decision_cierre(state, buffer_completo, decision)
 
+    # Aunque el modelo pida más checklist, si dijeron que no trabaja no hay video.
+    # La marca del modelo sola no alcanza: la batidora 4 se saltaba por error.
+    if fase == "checklist" and _texto_fuera_de_servicio(buffer_completo):
+        motivo = re.sub(r"\s+", " ", buffer_completo).strip()
+        if len(motivo) > 180:
+            motivo = motivo[:177] + "…"
+        state["answers"][f"{tipo}_bat{bat}_checklist"] = buffer_completo
+        state["answers"][f"{tipo}_bat{bat}_video"] = (
+            f"N/A — fuera de servicio / no usada: {motivo}"
+        )
+        state["buffer"] = ""
+        try:
+            await message.add_reaction("✅")
+        except Exception:
+            pass
+        await message.channel.send(
+            f"Batidora {bat} marcada como **no en uso / fuera de servicio** "
+            f"({motivo}). No pido video. Siguiente…"
+        )
+        await _ir_siguiente_batidora_o_fin(message, state)
+        return
+
     if not decision.get("respuesta_valida", False):
         state["buffer"] = buffer_completo
         if decision.get("pedir_detalle_limpieza"):
@@ -2123,10 +2156,6 @@ async def manejar_respuesta(message: discord.Message):
     except Exception:
         pass
  
-    # El modelo a veces marca fuera de servicio al ver "batidora 4" (la regla 4
-    # del prompt hablaba de eso). Solo saltamos el video si el texto lo dice.
-    fuera = _texto_fuera_de_servicio(buffer_completo)
-
     if fase in FASES_CIERRE_APAGADO:
         await _avanzar_cierre_apagado(message, state, buffer_completo, decision)
         return
@@ -2152,17 +2181,8 @@ async def manejar_respuesta(message: discord.Message):
     if fase == "checklist":
         state["answers"][f"{tipo}_bat{bat}_checklist"] = buffer_completo
         state["buffer"] = ""
- 
-        if fuera:
-            # Sin video si no funciona / no se usó
-            state["answers"][f"{tipo}_bat{bat}_video"] = "N/A — fuera de servicio / no usada"
-            await message.channel.send(
-                f"Batidora {bat} marcada como **no en uso / fuera de servicio**. Siguiente…"
-            )
-            await _ir_siguiente_batidora_o_fin(message, state)
-            return
- 
-        # Siempre pedir video si está en uso (regla fija — corrige el bug de saltarse videos)
+
+        # Siempre pedir video si está en uso. Si no trabaja, ya se salió arriba.
         state["fase"] = "video"
         await message.channel.send(TXT_VIDEO.format(bat=bat))
         return
