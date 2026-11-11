@@ -2239,8 +2239,9 @@ async def manejar_respuesta(message: discord.Message):
         )
         return
 
-    # El número de batidoras y las horas parciales se resuelven en código.
-    if fase in {"batidoras_dia", "batidoras_parcial"}:
+    # Cierre (agua sal, limpieza, horas, batidas): solo código.
+    # Un «no» aquí no es «la máquina no trabaja» y no pasa por el modelo.
+    if fase in FASES_CIERRE_APAGADO:
         buffer_prev = state.get("buffer") or ""
         buffer_completo = (buffer_prev + "\n" + texto).strip() if buffer_prev else texto
         decision = _combinar_decision_cierre(state, buffer_completo, {})
@@ -2268,17 +2269,6 @@ async def manejar_respuesta(message: discord.Message):
 
     if fase in FASES_CIERRE_APAGADO:
         decision = _combinar_decision_cierre(state, buffer_completo, decision)
-
-    # Aunque el modelo pida más checklist, si dijeron que no trabaja no hay video.
-    # La marca del modelo sola no alcanza: la batidora 4 se saltaba por error.
-    if fase == "checklist" and _texto_fuera_de_servicio(buffer_completo):
-        state["answers"][f"{tipo}_bat{bat}_checklist"] = buffer_completo
-        try:
-            await message.add_reaction("✅")
-        except Exception:
-            pass
-        await _registrar_fuera_y_seguir(message.channel, state, buffer_completo)
-        return
 
     if not decision.get("respuesta_valida", False):
         state["buffer"] = buffer_completo

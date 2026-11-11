@@ -146,7 +146,7 @@ def test_la_cuarta_no_se_salta_si_el_modelo_la_marca_fuera():
 
 
 def test_si_no_trabaja_no_pide_video_y_guarda_el_motivo():
-    """Dos máquinas paradas: no hay video, queda el motivo y sigue la siguiente."""
+    """El «no trabaja» se lee en ¿trabajó hoy?, no en el checklist ni en el agua sal."""
 
     async def correr():
         frases = (
@@ -159,16 +159,17 @@ def test_si_no_trabaja_no_pide_video_y_guarda_el_motivo():
             "no",
         )
         for i, frase in enumerate(frases):
-            canal = await _ir_hasta("apagado_batidoras", 4 if i % 2 == 0 else 2)
-            # Aunque el modelo diga que el checklist está incompleto.
-            main.consultar_grok = _grok(False, valida=False)
+            bat = 4 if i % 2 == 0 else 2
+            canal = await _ir_hasta("apagado_batidoras", bat)
+            main.consultar_grok = _grok(True, valida=True)
+            await main.manejar_respuesta(_Msg(canal, CHECKLIST_OK))
+            state = main.conversation_state[str(canal.id)]
+            assert state["fase"] == "trabajo_hoy"
             antes = len(canal.mensajes)
             await main.manejar_respuesta(_Msg(canal, frase))
             nuevos = canal.mensajes[antes:]
             assert not any("video del piñón" in m for m in nuevos), (frase, nuevos)
             assert any("no en uso" in m and frase in m for m in nuevos), (frase, nuevos)
-            state = main.conversation_state[str(canal.id)]
-            bat = 4 if i % 2 == 0 else 2
             guardado = state["answers"][f"apagado_batidoras_bat{bat}_video"]
             assert "fuera de servicio" in guardado and frase in guardado
             assert state["batidora"] == bat + 1
@@ -181,6 +182,7 @@ def test_la_cuarta_fuera_de_servicio_si_pasa_a_la_quinta():
     async def caso(tipo):
         canal = await _ir_hasta(tipo, 4)
         main.consultar_grok = _grok(True)
+        await main.manejar_respuesta(_Msg(canal, CHECKLIST_OK))
         await main.manejar_respuesta(_Msg(canal, "no funcionó hoy"))
         assert any("Batidora 4 marcada como **no en uso" in m for m in canal.mensajes)
         assert any(m.startswith("**Batidora 5**") for m in canal.mensajes)
@@ -302,10 +304,11 @@ def test_varias_fuera_y_reporte_completo_de_cinco():
         ):
             state = main.conversation_state[str(canal.id)]
             assert state["batidora"] == bat and state["fase"] == "checklist", (bat, state["fase"])
-            await main.manejar_respuesta(_Msg(canal, CHECKLIST_OK if como != "dañada" else "dañada"))
-            if como == "dañada":
-                continue
+            await main.manejar_respuesta(_Msg(canal, CHECKLIST_OK))
             assert state["fase"] == "trabajo_hoy"
+            if como == "dañada":
+                await main.manejar_respuesta(_Msg(canal, "dañada"))
+                continue
             if como == "sí":
                 await main.manejar_respuesta(_Msg(canal, "sí"))
                 await main.manejar_respuesta(_Msg(canal, "", video=f"pinon-{bat}.mp4"))
@@ -336,6 +339,60 @@ def test_varias_fuera_y_reporte_completo_de_cinco():
 
     asyncio.run(varias())
     asyncio.run(cinco_encendido())
+
+
+def test_no_en_agua_sal_avanza_y_no_repite_la_pregunta():
+    """Regresión: «no» al agua sal no es «la máquina no trabaja»."""
+
+    async def correr():
+        llamadas = []
+
+        async def grok(state, respuesta, tiene_media):
+            llamadas.append(state["fase"])
+            if (respuesta or "").strip().lower() == "no":
+                return {
+                    "respuesta_valida": False,
+                    "es_fuera_de_servicio": True,
+                    "mensaje": main.PREGUNTAS_CIERRE["agua_sal"],
+                }
+            return {
+                "respuesta_valida": True,
+                "es_fuera_de_servicio": False,
+                "mensaje": None,
+            }
+
+        main.consultar_grok = grok
+        canal = await _ir_hasta("apagado_batidoras", 1)
+        for bat, fuera in ((1, False), (2, True), (3, False), (4, True), (5, False)):
+            state = main.conversation_state[str(canal.id)]
+            assert state["fase"] == "checklist" and state["batidora"] == bat
+            await main.manejar_respuesta(_Msg(canal, CHECKLIST_OK))
+            if fuera:
+                await main.manejar_respuesta(_Msg(canal, "la 2 está en reparación" if bat == 2 else "en reparacion"))
+            else:
+                await main.manejar_respuesta(_Msg(canal, "sí"))
+                await main.manejar_respuesta(_Msg(canal, "", video=f"v{bat}.mp4"))
+        state = main.conversation_state[str(canal.id)]
+        assert state["fase"] == "agua_sal"
+        antes = len(canal.mensajes)
+        await main.manejar_respuesta(_Msg(canal, "no"))
+        nuevos = canal.mensajes[antes:]
+        assert not any("Agua sal" in m for m in nuevos), nuevos
+        assert any("Limpieza" in m for m in nuevos), nuevos
+        assert state["fase"] == "limpieza"
+        assert state["answers"]["agua_sal_cambios"] == []
+        assert "agua_sal" not in llamadas
+        await main.manejar_respuesta(_Msg(canal, "sí"))
+        assert state["fase"] == "hora_llegada"
+        await main.manejar_respuesta(_Msg(canal, "7:00 am"))
+        await main.manejar_respuesta(_Msg(canal, "12"))
+        await main.manejar_respuesta(_Msg(canal, "12:40 pm"))
+        await main.manejar_respuesta(_Msg(canal, "3"))
+        await main.manejar_respuesta(_Msg(canal, "ninguna"))
+        assert any("Reporte de Apagado" in m and "completado" in m for m in canal.mensajes)
+        assert str(canal.id) not in main.conversation_state
+
+    asyncio.run(correr())
 
 
 if __name__ == "__main__":
