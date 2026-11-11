@@ -22,8 +22,9 @@ class _Canal:
         self.id = 404
         self.mensajes = []
 
-    async def send(self, texto):
+    async def send(self, texto, **kwargs):
         self.mensajes.append(texto)
+        self.ultimo_view = kwargs.get("view")
 
 
 class _Usuario:
@@ -75,7 +76,9 @@ async def _ir_hasta(tipo, batidora, grok_fuera=False):
             return canal
         if state["fase"] == "funcionamiento" and state["batidora"] == batidora:
             return canal
-        if state["fase"] == "video":
+        if state["fase"] == "trabajo_hoy":
+            await main.manejar_respuesta(_Msg(canal, "sí"))
+        elif state["fase"] == "video":
             await main.manejar_respuesta(
                 _Msg(canal, "", video=f"pinon-{state['batidora']}.mp4")
             )
@@ -124,10 +127,15 @@ def test_la_cuarta_no_se_salta_si_el_modelo_la_marca_fuera():
             antes = len(canal.mensajes)
             await main.manejar_respuesta(_Msg(canal, CHECKLIST_OK))
             nuevos = canal.mensajes[antes:]
-            assert any("video del piñón de la batidora 4" in m for m in nuevos), nuevos
+            assert any("¿La **batidora 4** trabajó hoy?" in m for m in nuevos), nuevos
+            assert not any("video del piñón" in m for m in nuevos), nuevos
             assert not any("fuera de servicio" in m for m in nuevos), nuevos
             state = main.conversation_state[str(canal.id)]
-            assert state["batidora"] == 4 and state["fase"] == "video"
+            assert state["batidora"] == 4 and state["fase"] == "trabajo_hoy"
+            await main.manejar_respuesta(_Msg(canal, "sí"))
+            assert any("video del piñón de la batidora 4" in m for m in canal.mensajes)
+            state = main.conversation_state[str(canal.id)]
+            assert state["fase"] == "video"
             await main.manejar_respuesta(_Msg(canal, "", video="pinon-4.mp4"))
             assert any(m.startswith("**Batidora 5**") for m in canal.mensajes), canal.mensajes[-1]
             state = main.conversation_state[str(canal.id)]
@@ -189,6 +197,7 @@ def test_la_quinta_cierra_sin_pedir_una_sexta():
         canal = await _ir_hasta("encendido_batidoras", 5)
         main.consultar_grok = _grok(True)
         await main.manejar_respuesta(_Msg(canal, CHECKLIST_OK))
+        await main.manejar_respuesta(_Msg(canal, "sí"))
         await main.manejar_respuesta(_Msg(canal, "", video="pinon-5.mp4"))
         assert any("Encendido de Batidoras completado" in m for m in canal.mensajes)
         assert not any("Batidora 6" in m for m in canal.mensajes)
@@ -198,6 +207,7 @@ def test_la_quinta_cierra_sin_pedir_una_sexta():
         canal = await _ir_hasta("apagado_batidoras", 5)
         main.consultar_grok = _grok(False)
         await main.manejar_respuesta(_Msg(canal, CHECKLIST_OK))
+        await main.manejar_respuesta(_Msg(canal, "sí"))
         await main.manejar_respuesta(_Msg(canal, "", video="pinon-5.mp4"))
         assert any("Agua sal" in m for m in canal.mensajes)
         assert not any("Batidora 6" in m for m in canal.mensajes)
@@ -206,6 +216,126 @@ def test_la_quinta_cierra_sin_pedir_una_sexta():
 
     asyncio.run(encendido())
     asyncio.run(apagado())
+
+
+class _Resp:
+    def __init__(self):
+        self.done = False
+
+    def is_done(self):
+        return self.done
+
+    async def edit_message(self, **kwargs):
+        self.done = True
+
+    async def send_message(self, content, **kwargs):
+        self.done = True
+        self.content = content
+
+    async def defer(self):
+        self.done = True
+
+
+class _Inter:
+    def __init__(self, canal, uid=7):
+        self.channel = canal
+        self.user = _Usuario()
+        self.user.id = uid
+        self.response = _Resp()
+
+
+def test_boton_no_en_reparacion_no_pide_video():
+    async def correr():
+        canal = await _ir_hasta("apagado_batidoras", 2)
+        await main.manejar_respuesta(_Msg(canal, CHECKLIST_OK))
+        state = main.conversation_state[str(canal.id)]
+        assert state["fase"] == "trabajo_hoy" and state["batidora"] == 2
+        view = main.TrabajoHoyView(str(canal.id), 2)
+        await view._resolver(_Inter(canal), False)
+        assert not any("video del piñón de la batidora 2" in m for m in canal.mensajes)
+        assert any("batidora 2" in m.lower() and "no en uso" in m for m in canal.mensajes)
+        guardado = state["answers"]["apagado_batidoras_bat2_video"]
+        assert "reparación o parada" in guardado
+        assert state["batidora"] == 3 and state["fase"] == "checklist"
+
+    asyncio.run(correr())
+
+
+def test_texto_en_la_pregunta_y_en_el_video_de_la_2():
+    """El caso de Karina: «la 2 está en reparación» no puede seguir pidiendo video."""
+
+    async def en_la_pregunta():
+        canal = await _ir_hasta("apagado_batidoras", 2)
+        await main.manejar_respuesta(_Msg(canal, CHECKLIST_OK))
+        await main.manejar_respuesta(_Msg(canal, "está en reparación"))
+        assert not any("video del piñón de la batidora 2" in m for m in canal.mensajes)
+        state = main.conversation_state[str(canal.id)]
+        assert "reparación" in state["answers"]["apagado_batidoras_bat2_video"]
+        assert state["batidora"] == 3
+
+    async def en_el_video():
+        canal = await _ir_hasta("encendido_batidoras", 2)
+        await main.manejar_respuesta(_Msg(canal, CHECKLIST_OK))
+        await main.manejar_respuesta(_Msg(canal, "sí"))
+        state = main.conversation_state[str(canal.id)]
+        assert state["fase"] == "video"
+        await main.manejar_respuesta(_Msg(canal, "la 2 está en reparación"))
+        assert state["batidora"] == 3
+        assert state["fase"] == "checklist"
+        assert "reparación" in state["answers"]["encendido_batidoras_bat2_video"]
+        videos = [m for m in canal.mensajes if "video del piñón de la batidora 2" in m]
+        assert len(videos) == 1
+
+    asyncio.run(en_la_pregunta())
+    asyncio.run(en_el_video())
+
+
+def test_varias_fuera_y_reporte_completo_de_cinco():
+    async def varias():
+        canal = await _ir_hasta("apagado_batidoras", 1)
+        for bat, como in (
+            (1, "sí"),
+            (2, "en reparacion"),
+            (3, "sí"),
+            (4, "boton-no"),
+            (5, "dañada"),
+        ):
+            state = main.conversation_state[str(canal.id)]
+            assert state["batidora"] == bat and state["fase"] == "checklist", (bat, state["fase"])
+            await main.manejar_respuesta(_Msg(canal, CHECKLIST_OK if como != "dañada" else "dañada"))
+            if como == "dañada":
+                continue
+            assert state["fase"] == "trabajo_hoy"
+            if como == "sí":
+                await main.manejar_respuesta(_Msg(canal, "sí"))
+                await main.manejar_respuesta(_Msg(canal, "", video=f"pinon-{bat}.mp4"))
+            elif como == "en reparacion":
+                await main.manejar_respuesta(_Msg(canal, "en reparacion"))
+            else:
+                view = main.TrabajoHoyView(str(canal.id), bat)
+                await view._resolver(_Inter(canal), False)
+        assert any("Agua sal" in m for m in canal.mensajes)
+        assert not any("Batidora 6" in m for m in canal.mensajes)
+        answers = main.conversation_state[str(canal.id)]["answers"]
+        assert "reparacion" in answers["apagado_batidoras_bat2_video"].lower() or "reparación" in answers["apagado_batidoras_bat2_video"]
+        assert "fuera de servicio" in answers["apagado_batidoras_bat4_video"]
+        assert "dañada" in answers["apagado_batidoras_bat5_video"]
+        assert "archivos" in str(answers["apagado_batidoras_bat1_video"])
+        assert "archivos" in str(answers["apagado_batidoras_bat3_video"])
+
+    async def cinco_encendido():
+        canal = await _ir_hasta("encendido_batidoras", 1)
+        for bat in range(1, 6):
+            state = main.conversation_state[str(canal.id)]
+            assert state["batidora"] == bat and state["fase"] == "checklist"
+            await main.manejar_respuesta(_Msg(canal, CHECKLIST_OK))
+            await main.manejar_respuesta(_Msg(canal, "Sí"))
+            await main.manejar_respuesta(_Msg(canal, "", video=f"pin-{bat}.mp4"))
+        assert any("Encendido de Batidoras completado" in m for m in canal.mensajes)
+        assert not any("Batidora 6" in m for m in canal.mensajes)
+
+    asyncio.run(varias())
+    asyncio.run(cinco_encendido())
 
 
 if __name__ == "__main__":
