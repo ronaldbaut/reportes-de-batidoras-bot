@@ -1362,16 +1362,25 @@ def _vacio_o_basura(texto: str, tiene_media: bool) -> bool:
     return t.lower() in {".", "..", "...", "ok", "vale", "listo", "k", "ya", "-", "—"}
  
  
+_RE_CANCELAR = re.compile(
+    r"^(?:por favor |quiero |necesito )?"
+    r"(?:cancelar|cancela|canelar|cancel|detener)"
+    r"(?:\s+(?:el\s+)?reporte)?$"
+    r"|^reporte cancelado$"
+)
+
+
+def _es_orden_cancelar(texto: str) -> bool:
+    """Acepta cancelar, cancelar., **cancelar**, cancelar el reporte, cancela."""
+    t = _norm_es(texto or "")
+    t = t.replace("*", " ").replace("_", " ").replace("`", " ")
+    t = re.sub(r"[^\w\s]", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return bool(_RE_CANCELAR.match(t))
+
+
 def _parece_cancelar(content_lower: str) -> bool:
-    patrones = [
-        r"^cancelar(\s+reporte)?$",
-        r"^cancel(\s+report)?$",
-        r"^cancela(r)?$",
-        r"^canelar(\s+reporte)?$",
-        r"^reporte\s+cancelado$",
-        r"^detener(\s+reporte)?$",
-    ]
-    return any(re.match(p, content_lower) for p in patrones)
+    return _es_orden_cancelar(content_lower)
  
  
 def _tiene_media(message: discord.Message) -> bool:
@@ -1397,7 +1406,8 @@ def _media_ids(message: discord.Message) -> list:
 def _msg_inicio(tipo: str, user: discord.abc.User) -> str:
     base_cancel = (
         f"_Solo {user.display_name} puede responder este reporte._\n"
-        f"_Escribe **cancelar** o **cancelar reporte** para detenerlo._"
+        f"_Escribe **cancelar** para detenerlo y empezar de cero. "
+        f"Cualquiera en el canal puede cancelarlo._"
     )
     if tipo == "encendido_batidoras":
         return (
@@ -1459,7 +1469,7 @@ async def _iniciar(channel, user: discord.abc.User, tipo: str):
         dueño = conversation_state[channel_id]["user_id"]
         await channel.send(
             f"Ya hay un reporte de batidoras en curso (iniciado por <@{dueño}>). "
-            f"Termínenlo o escriban **cancelar reporte**."
+            f"Escribe **cancelar** en este canal para borrarlo y empezar de cero."
         )
         return
     conversation_state[channel_id] = _estado_inicial(tipo, user.id)
@@ -1653,6 +1663,28 @@ async def slash_apagado(interaction: discord.Interaction):
         await interaction.followup.send("Reporte de apagado iniciado en el canal.", ephemeral=True)
     except Exception:
         pass
+
+
+@bot.tree.command(
+    name="cancelar-reporte-batidoras",
+    description="Borra el reporte de batidoras en curso en este canal",
+)
+async def slash_cancelar(interaction: discord.Interaction):
+    channel_id = str(interaction.channel.id)
+    habia = channel_id in conversation_state
+    conversation_state.pop(channel_id, None)
+    parent = getattr(interaction.channel, "parent_id", None)
+    if parent:
+        habia = conversation_state.pop(str(parent), None) is not None or habia
+    if habia:
+        await interaction.response.send_message(
+            "✅ Reporte de batidoras cancelado. Ya pueden empezar uno nuevo."
+        )
+    else:
+        await interaction.response.send_message(
+            "No hay un reporte de batidoras en curso en este canal.",
+            ephemeral=True,
+        )
  
  
 @bot.event
@@ -1675,12 +1707,21 @@ async def on_message(message: discord.Message):
     channel_id = str(message.channel.id)
     state = conversation_state.get(channel_id)
  
-    # Cancelar
-    if state and _parece_cancelar(content_lower):
-        es_dueño = message.author.id == state["user_id"]
-        if es_dueño or content_lower in {"cancelar reporte", "reporte cancelado", "canelar reporte"}:
-            del conversation_state[channel_id]
-            await message.channel.send("✅ Reporte de batidoras cancelado.")
+    # Cancelar: cualquiera en el canal, y siempre respondemos.
+    # Antes, si no eras quien lo abrió, "cancelar" se ignoraba en silencio.
+    if _es_orden_cancelar(message.content):
+        habia = conversation_state.pop(channel_id, None) is not None
+        parent = getattr(message.channel, "parent_id", None)
+        if parent:
+            habia = conversation_state.pop(str(parent), None) is not None or habia
+        if habia:
+            await message.channel.send(
+                "✅ Reporte de batidoras cancelado. Ya pueden empezar uno nuevo."
+            )
+        else:
+            await message.channel.send(
+                "No hay un reporte de batidoras en curso en este canal."
+            )
         return
  
     # Inicio por texto
