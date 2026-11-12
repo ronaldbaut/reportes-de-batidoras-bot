@@ -1283,10 +1283,17 @@ def _combinar_decision_cierre(state: dict, texto: str, decision: dict) -> dict:
         if horas is None:
             decision["respuesta_valida"] = False
             decision["mensaje"] = (
-                "No entendí. Escribe solo números con las horas, por ejemplo 4, o 4 y 2,5. "
-                "Si todas trabajaron el día completo, escribe NO."
+                "No entendí. Si una trabajó 4 horas, escribe 4. "
+                "Si fueron dos, una de 4 horas y otra de 2 horas y media, escribe 4 y 2,5. "
+                "Si todas las que trabajaron hicieron el día entero, escribe NO."
             )
             return decision
+        if _hay_marca_trabajo(state):
+            trabajaron = _batidoras_que_trabajaron(state)
+            if len(horas) > len(trabajaron):
+                decision["respuesta_valida"] = False
+                decision["mensaje"] = _MSG_MAS_HORAS_QUE_TRABAJARON
+                return decision
         dia = (state.get("answers") or {}).get("batidoras_dia")
         if dia is None:
             dia = (state.get("answers") or {}).get("num_batidoras")
@@ -1301,7 +1308,7 @@ def _combinar_decision_cierre(state: dict, texto: str, decision: dict) -> dict:
                 "(las del día completo más las que trabajaron solo una parte)."
             )
             return decision
-        if dia + len(horas) == 0:
+        if dia + len(horas) == 0 and not _hay_marca_trabajo(state):
             decision["respuesta_valida"] = False
             decision["mensaje"] = (
                 "Tiene que haber trabajado al menos una batidora, todo el día o una parte. "
@@ -1521,7 +1528,10 @@ async def _ir_siguiente_batidora_o_fin(message: discord.Message, state: dict):
     if tipo == "apagado_batidoras" and state.get("fase") not in FASES_CIERRE_APAGADO:
         state["buffer"] = ""
         state["fase"] = "agua_sal"
-        await message.channel.send(PREGUNTAS_CIERRE["agua_sal"])
+        await message.channel.send(
+            "Listo con las 5 batidoras. Ahora van las preguntas del cierre, para todas juntas.\n\n"
+            + PREGUNTAS_CIERRE["agua_sal"]
+        )
         return
 
     await _finalizar_reporte(message, state)
@@ -1585,6 +1595,52 @@ async def _cerrar_apagado(message: discord.Message, state: dict):
     await _finalizar_reporte(message, state)
 
 
+def _hay_marca_trabajo(state: dict) -> bool:
+    tipo = state.get("tipo") or ""
+    answers = state.get("answers") or {}
+    return any(
+        f"{tipo}_bat{n}_trabajo" in answers for n in range(1, NUM_BATIDORAS + 1)
+    )
+
+
+def _batidoras_que_trabajaron(state: dict) -> list[int]:
+    tipo = state.get("tipo") or ""
+    answers = state.get("answers") or {}
+    return [
+        n
+        for n in range(1, NUM_BATIDORAS + 1)
+        if answers.get(f"{tipo}_bat{n}_trabajo") == "si"
+    ]
+
+
+def _lista_la(nums: list[int]) -> str:
+    partes = [f"la {n}" for n in nums]
+    if len(partes) <= 1:
+        return partes[0] if partes else ""
+    if len(partes) == 2:
+        return f"{partes[0]} y {partes[1]}"
+    return ", ".join(partes[:-1]) + " y " + partes[-1]
+
+
+def _pregunta_batidoras_parcial(nums: list[int]) -> str:
+    if len(nums) == 1:
+        cierre = "Si esa hizo el día entero, escribe NO."
+    else:
+        cierre = "Si todas hicieron el día entero, escribe NO."
+    return (
+        f"De las que sí trabajaron hoy ({_lista_la(nums)}): si alguna no hizo el día entero, "
+        "escribe solo las horas que sí trabajó. Si una trabajó 4 horas, escribe 4. "
+        "Si fueron dos, una de 4 horas y otra de 2 horas y media, escribe 4 y 2,5. "
+        f"{cierre}"
+    )
+
+
+_MSG_MAS_HORAS_QUE_TRABAJARON = (
+    "Hay más horas que batidoras que trabajaron hoy. "
+    "Escribe solo las de las que no hicieron el día entero, o NO si todas lo hicieron."
+)
+
+
 async def _avanzar_cierre_apagado(
     message: discord.Message,
     state: dict,
@@ -1629,13 +1685,34 @@ async def _avanzar_cierre_apagado(
         state["answers"]["batidoras_dia"] = decision.get("_batidoras_dia")
         state["answers"]["num_batidoras"] = decision.get("_batidoras_dia")
     elif fase == "batidoras_parcial":
+        horas = decision.get("_horas_parciales") or []
+        if _hay_marca_trabajo(state):
+            trabajaron = _batidoras_que_trabajaron(state)
+            dia = len(trabajaron) - len(horas)
+            if dia < 0:
+                state["buffer"] = buffer_completo
+                await message.channel.send(_MSG_MAS_HORAS_QUE_TRABAJARON)
+                return
+            state["answers"]["batidoras_dia"] = dia
+            state["answers"]["num_batidoras"] = dia
         state["answers"]["batidoras_parcial_texto"] = buffer_completo
-        state["answers"]["batidoras_parciales"] = decision.get("_horas_parciales") or []
+        state["answers"]["batidoras_parciales"] = horas
         state["buffer"] = ""
         await _cerrar_apagado(message, state)
         return
 
     state["buffer"] = ""
+    if fase == "hora_culminacion":
+        trabajaron = _batidoras_que_trabajaron(state)
+        if not trabajaron:
+            state["answers"]["batidoras_dia"] = 0
+            state["answers"]["num_batidoras"] = 0
+            state["answers"]["batidoras_parciales"] = []
+            await _cerrar_apagado(message, state)
+            return
+        state["fase"] = "batidoras_parcial"
+        await message.channel.send(_pregunta_batidoras_parcial(trabajaron))
+        return
     orden = list(FASES_CIERRE_APAGADO)
     state["fase"] = orden[orden.index(fase) + 1]
     await message.channel.send(PREGUNTAS_CIERRE[state["fase"]])
@@ -2317,7 +2394,10 @@ async def manejar_respuesta(message: discord.Message):
     if fase == "checklist":
         state["answers"][f"{tipo}_bat{bat}_checklist"] = buffer_completo
         state["buffer"] = ""
-        await _pedir_pregunta_trabajo(message.channel, state)
+        if _texto_fuera_de_servicio(buffer_completo):
+            await _registrar_fuera_y_seguir(message.channel, state, buffer_completo)
+        else:
+            await _pedir_video(message.channel, state)
         return
  
  
