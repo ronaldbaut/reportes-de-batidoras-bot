@@ -660,7 +660,19 @@ def test_pausa_no_cuenta_como_inicio_ni_fin():
     completas = (
         "7:00 am encendida / 1:45 apagada / Tiempos de batidas / Normales 45 minutos"
     )
+    por_linea = (
+        "7:00 am encendida\n"
+        "3:33 pm apagada\n"
+        "Tiempos de batidas\n"
+        "Normal 32 minutos"
+    )
+    italica = (
+        "7:00 𝘢𝘮 𝘦𝘯𝘤𝘦𝘯𝘥𝘪𝘥𝘢 / 1:45 𝘢𝘱𝘢𝘨𝘢𝘥𝘢 / "
+        "𝘛𝘪𝘦𝘮𝘱𝘰𝘴 𝘥𝘦 𝘣𝘢𝘵𝘪𝘥𝘢𝘴 / 𝘕𝘰𝘳𝘮𝘢𝘭𝘦𝘴 45 𝘮𝘪𝘯𝘶𝘵𝘰𝘴"
+    )
     assert main._respuesta_trae_horas_y_batidas(pausa) is False
+    assert main._respuesta_trae_horas_y_batidas(por_linea) is True
+    assert main._respuesta_trae_horas_y_batidas(italica) is True
     assert main._respuesta_trae_horas_y_batidas(completas) is True
     assert main._respuesta_trae_horas_y_batidas(CHECKLIST_OK) is True
 
@@ -684,6 +696,62 @@ def test_pausa_no_cuenta_como_inicio_ni_fin():
         assert any("video del piñón" in m for m in nuevos), nuevos
         assert main.PREGUNTA_HORAS_BATIDA not in nuevos
         assert main.conversation_state[str(canal.id)]["fase"] == "video"
+
+    asyncio.run(correr())
+
+
+def test_no_repite_horas_si_el_validador_ya_las_pidio():
+    """Si el validador ya pidió horas, la respuesta siguiente va al video."""
+
+    async def correr():
+        llamadas = {"n": 0}
+
+        async def grok(state, respuesta, tiene_media):
+            llamadas["n"] += 1
+            if llamadas["n"] == 1:
+                return {
+                    "respuesta_valida": False,
+                    "es_fuera_de_servicio": False,
+                    "mensaje": "Faltan horas encendido/apagado y tiempos de batida",
+                }
+            return {
+                "respuesta_valida": True,
+                "es_fuera_de_servicio": False,
+                "mensaje": None,
+            }
+
+        main.consultar_grok = grok
+        main.conversation_state.clear()
+        canal = _Canal()
+        await main._iniciar(canal, _Usuario(), "apagado_batidoras")
+        antes = len(canal.mensajes)
+        await main.manejar_respuesta(_Msg(canal, MECANICO_SIN_HORAS))
+        nuevos = canal.mensajes[antes:]
+        assert nuevos == ["Faltan horas encendido/apagado y tiempos de batida"], nuevos
+        assert main.PREGUNTA_HORAS_BATIDA not in nuevos
+        state = main.conversation_state[str(canal.id)]
+        assert state["fase"] == "checklist"
+        assert state["pidio_horas_batida"] is True
+
+        # Horas reales, pero sin las palabras que el parser exige: no se vuelve a preguntar.
+        horas = "7:00 am a 3:33 pm, normal 32 minutos"
+        assert main._respuesta_trae_horas_y_batidas(horas) is False
+        antes = len(canal.mensajes)
+        await main.manejar_respuesta(_Msg(canal, horas))
+        nuevos = canal.mensajes[antes:]
+        assert main.PREGUNTA_HORAS_BATIDA not in nuevos
+        assert any("video del piñón" in m for m in nuevos), nuevos
+        assert state["fase"] == "video"
+        assert state["answers"]["apagado_batidoras_bat1_checklist"].endswith(horas)
+
+        await main.manejar_respuesta(_Msg(canal, "", video="pinon-1.mp4"))
+        assert state["batidora"] == 2 and state["fase"] == "checklist"
+        assert state["pidio_horas_batida"] is False
+        antes = len(canal.mensajes)
+        await main.manejar_respuesta(_Msg(canal, MECANICO_SIN_HORAS))
+        nuevos = canal.mensajes[antes:]
+        assert nuevos == [main.PREGUNTA_HORAS_BATIDA], nuevos
+        assert state["batidora"] == 2 and state["fase"] == "horas_batida"
 
     asyncio.run(correr())
 
