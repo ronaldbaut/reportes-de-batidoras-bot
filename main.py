@@ -38,6 +38,7 @@ client = OpenAI(
 #   "answers": {...},
 #   "videos_usados": [filename o url, ...],  # evita reutilizar el mismo video en 2 batidoras
 #   "hora_global": str | None,
+#   "pidio_horas_batida": bool,  # apagado: ya se pidieron horas o tiempos en esta batidora
 # }
 conversation_state = {}
  
@@ -1384,9 +1385,20 @@ def _texto_fuera_de_servicio(texto: str) -> bool:
     )
 
 
+def _mensaje_pide_horas_batida(mensaje: str) -> bool:
+    """El validador ya pidió horas de encendido/apagado o tiempos de batida."""
+    t = _norm_es(mensaje or "")
+    if re.search(r"\bhoras?\b", t):
+        return True
+    return bool(re.search(r"\btiempos?\b", t) and re.search(r"\bbatid", t))
+
+
 def _respuesta_trae_horas_y_batidas(texto: str) -> bool:
     """El checklist de apagado ya trae hora de inicio, hora de fin y tiempo de batida."""
-    t = _norm_es(texto or "")
+    import unicodedata
+
+    t = unicodedata.normalize("NFKC", texto or "")
+    t = _norm_es(t)
     t = re.sub(r"\ba\s*\.?\s*m\.?\b|\bp\s*\.?\s*m\.?\b", " ", t)
     relojes = list(re.finditer(r"\b\d{1,2}\s*[:.]\s*\d{1,2}\b", t))
     palabras = list(
@@ -1405,22 +1417,35 @@ def _respuesta_trae_horas_y_batidas(texto: str) -> bool:
             return "fin"
         return "inicio"
 
-    tiene_inicio = False
-    tiene_fin = False
-    for rel in relojes:
+    def _mas_cercana(reloj, candidatas, tope):
         mejor = None
-        for pal in palabras:
-            if pal.end() <= rel.start():
-                dist = rel.start() - pal.end()
-            elif pal.start() >= rel.end():
-                dist = pal.start() - rel.end()
+        for pal in candidatas:
+            if pal.end() <= reloj.start():
+                dist = reloj.start() - pal.end()
+            elif pal.start() >= reloj.end():
+                dist = pal.start() - reloj.end()
             else:
                 dist = 0
-            if dist > 24:
+            if tope is not None and dist > tope:
                 continue
             clase = _clase(pal.group())
             if mejor is None or dist < mejor[0]:
                 mejor = (dist, clase)
+        return mejor
+
+    tiene_inicio = False
+    tiene_fin = False
+    for rel in relojes:
+        ini = t.rfind("\n", 0, rel.start()) + 1
+        fin_linea = t.find("\n", rel.start())
+        if fin_linea < 0:
+            fin_linea = len(t)
+        en_linea = [p for p in palabras if ini <= p.start() and p.end() <= fin_linea]
+        # Una palabra de otra línea no gana a la de la línea del reloj.
+        if en_linea:
+            mejor = _mas_cercana(rel, en_linea, None)
+        else:
+            mejor = _mas_cercana(rel, palabras, 24)
         if mejor and mejor[1] == "inicio":
             tiene_inicio = True
         elif mejor and mejor[1] == "fin":
@@ -1546,6 +1571,7 @@ def _estado_inicial(tipo: str, user_id: int) -> dict:
         "answers": {},
         "videos_usados": [],
         "hora_global": None,
+        "pidio_horas_batida": False,
     }
  
  
@@ -1578,6 +1604,8 @@ async def _ir_siguiente_batidora_o_fin(message: discord.Message, state: dict):
     if bat < NUM_BATIDORAS:
         state["batidora"] = bat + 1
         state["buffer"] = ""
+        if tipo == "apagado_batidoras":
+            state["pidio_horas_batida"] = False
         if tipo == "funcionamiento_batidoras":
             state["fase"] = "funcionamiento"
             await message.channel.send(
@@ -2442,6 +2470,12 @@ async def manejar_respuesta(message: discord.Message):
             "responde completo lo que se te preguntó.",
         }:
             msg = "Me falta un dato concreto. Complétalo en un mensaje más (o di si la batidora no funciona)."
+        if (
+            tipo == "apagado_batidoras"
+            and fase == "checklist"
+            and _mensaje_pide_horas_batida(msg)
+        ):
+            state["pidio_horas_batida"] = True
         await message.channel.send(msg)
         return
  
@@ -2480,8 +2514,10 @@ async def manejar_respuesta(message: discord.Message):
             await _registrar_fuera_y_seguir(message.channel, state, buffer_completo)
         elif (
             tipo == "apagado_batidoras"
+            and not state.get("pidio_horas_batida")
             and not _respuesta_trae_horas_y_batidas(buffer_completo)
         ):
+            state["pidio_horas_batida"] = True
             state["fase"] = "horas_batida"
             await message.channel.send(PREGUNTA_HORAS_BATIDA)
         else:
