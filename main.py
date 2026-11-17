@@ -31,7 +31,7 @@ client = OpenAI(
 #   "tipo": "encendido_batidoras" | "funcionamiento_batidoras" | "apagado_batidoras",
 #   "user_id": int,
 #   "batidora": 1..5,
-#   "fase": "hora" | "checklist" | "video" | "funcionamiento"
+#   "fase": "hora" | "checklist" | "horas_batida" | "video" | "funcionamiento"
 #           | "agua_sal" | "limpieza" | "hora_llegada" | "batidas"
 #           | "hora_culminacion" | "batidoras_dia" | "batidoras_parcial",
 #   "buffer": str,
@@ -77,6 +77,14 @@ TXT_CHECKLIST_APAGADO = (
     "• **Tiempos aproximados de batida:** normal, gourmet, clásica, batipop o sundae, "
     "lo que hayan usado hoy.\n"
     "Si **no funcionó hoy**, dilo y pasamos a la siguiente."
+)
+
+# Mismos dos puntos del checklist de apagado. Se piden otra vez solo si
+# la batidora sí trabajó y en la respuesta no vinieron inicio, fin y batidas.
+PREGUNTA_HORAS_BATIDA = (
+    "• **Hora de encendido y de apagado:** si se apagó y se volvió a prender, anota cada tramo.\n"
+    "• **Tiempos aproximados de batida:** normal, gourmet, clásica, batipop o sundae, "
+    "lo que hayan usado hoy."
 )
  
 TXT_FUNCIONAMIENTO = (
@@ -1376,6 +1384,21 @@ def _texto_fuera_de_servicio(texto: str) -> bool:
     )
 
 
+def _respuesta_trae_horas_y_batidas(texto: str) -> bool:
+    """El checklist de apagado ya trae hora de inicio, hora de fin y tiempo de batida."""
+    t = _norm_es(texto or "")
+    n_reloj = len(re.findall(r"\b\d{1,2}\s*[:.]\s*\d{1,2}\b", t))
+    tiene_tramo = bool(re.search(r"\bencend", t)) and bool(re.search(r"\bapag", t))
+    if n_reloj < 2 and not (tiene_tramo and n_reloj >= 1):
+        return False
+    return bool(
+        re.search(
+            r"\b(normal|gourmet|clasica|batipop|sundae|batida|batidas|tiempo|tiempos|minut)\b",
+            t,
+        )
+    )
+
+
 def _vacio_o_basura(texto: str, tiene_media: bool) -> bool:
     t = (texto or "").strip()
     if tiene_media:
@@ -2281,6 +2304,25 @@ async def manejar_respuesta(message: discord.Message):
         await _pedir_pregunta_trabajo(message.channel, state)
         return
 
+    if fase == "horas_batida":
+        if _texto_fuera_de_servicio(texto):
+            try:
+                await message.add_reaction("✅")
+            except Exception:
+                pass
+            await _registrar_fuera_y_seguir(message.channel, state, texto)
+            return
+        if _vacio_o_basura(texto, tiene_media) or (tiene_media and not texto):
+            await message.channel.send(PREGUNTA_HORAS_BATIDA)
+            return
+        try:
+            await message.add_reaction("✅")
+        except Exception:
+            pass
+        state["answers"][f"{tipo}_bat{bat}_horas"] = texto
+        await _pedir_video(message.channel, state)
+        return
+
     # ---- Prefiltro basura (no video) ----
     if _vacio_o_basura(texto, tiene_media):
         # En limpieza, el segundo intento cuenta aunque sea corto ("ok", "no").
@@ -2396,6 +2438,12 @@ async def manejar_respuesta(message: discord.Message):
         state["buffer"] = ""
         if _texto_fuera_de_servicio(buffer_completo):
             await _registrar_fuera_y_seguir(message.channel, state, buffer_completo)
+        elif (
+            tipo == "apagado_batidoras"
+            and not _respuesta_trae_horas_y_batidas(buffer_completo)
+        ):
+            state["fase"] = "horas_batida"
+            await message.channel.send(PREGUNTA_HORAS_BATIDA)
         else:
             await _pedir_video(message.channel, state)
         return

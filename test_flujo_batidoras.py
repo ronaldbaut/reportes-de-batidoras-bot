@@ -13,7 +13,8 @@ import main
 
 CHECKLIST_OK = (
     "dientes completos, piñón ajustado y engrasado, cuchilla bien, "
-    "agua sal a nivel, la correa no está floja, encendido 7:00 apagado 12:00"
+    "agua sal a nivel, la correa no está floja, encendido 7:00 apagado 12:00, "
+    "tiempo de batida normal"
 )
 
 
@@ -593,6 +594,59 @@ def test_pregunta_parcial_una_o_dos_y_el_reintento():
     )
     assert decision["respuesta_valida"] is False
     assert decision["mensaje"] == REINTENTO_PARCIAL
+
+
+MECANICO_SIN_HORAS = (
+    "dientes completos, piñón ajustado y engrasado, cuchilla bien, agua sal a nivel"
+)
+
+
+def test_cierre_batidora_que_trabaja_pide_inicio_fin_y_batidas():
+    """En el apagado, la 1 pide lo mismo que la 2. Fuera de servicio, no."""
+
+    async def correr():
+        main.consultar_grok = _grok(False)
+        main.conversation_state.clear()
+        canal = _Canal()
+        await main._iniciar(canal, _Usuario(), "apagado_batidoras")
+        antes = len(canal.mensajes)
+        await main.manejar_respuesta(_Msg(canal, MECANICO_SIN_HORAS))
+        nuevos = canal.mensajes[antes:]
+        assert nuevos == [main.PREGUNTA_HORAS_BATIDA], nuevos
+        state = main.conversation_state[str(canal.id)]
+        assert state["batidora"] == 1 and state["fase"] == "horas_batida"
+        assert "Hora de encendido" in main.PREGUNTA_HORAS_BATIDA
+        assert "apagado" in main.PREGUNTA_HORAS_BATIDA
+        assert "Tiempos aproximados de batida" in main.PREGUNTA_HORAS_BATIDA
+        assert main.PREGUNTA_HORAS_BATIDA in main.TXT_CHECKLIST_APAGADO
+
+        await main.manejar_respuesta(
+            _Msg(canal, "encendido 7:00 apagado 12:00, tiempo de batida normal")
+        )
+        assert state["fase"] == "video"
+        assert state["answers"]["apagado_batidoras_bat1_horas"].startswith("encendido 7:00")
+        await main.manejar_respuesta(_Msg(canal, "", video="pinon-1.mp4"))
+
+        antes = len(canal.mensajes)
+        await main.manejar_respuesta(_Msg(canal, MECANICO_SIN_HORAS))
+        nuevos = canal.mensajes[antes:]
+        assert nuevos == [main.PREGUNTA_HORAS_BATIDA], nuevos
+        assert state["batidora"] == 2 and state["fase"] == "horas_batida"
+
+        canal = _Canal()
+        main.conversation_state.clear()
+        await main._iniciar(canal, _Usuario(), "apagado_batidoras")
+        antes = len(canal.mensajes)
+        await main.manejar_respuesta(_Msg(canal, "en reparación"))
+        nuevos = canal.mensajes[antes:]
+        assert main.PREGUNTA_HORAS_BATIDA not in nuevos
+        assert not any("video del piñón" in m for m in nuevos)
+        assert any("no en uso" in m for m in nuevos)
+        state = main.conversation_state[str(canal.id)]
+        assert state["batidora"] == 2 and state["fase"] == "checklist"
+        assert state["answers"]["apagado_batidoras_bat1_trabajo"] == "no"
+
+    asyncio.run(correr())
 
 
 if __name__ == "__main__":
