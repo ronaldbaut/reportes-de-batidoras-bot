@@ -79,6 +79,26 @@ def test_cancelar_en_el_hilo_borra_el_canal():
     asyncio.run(correr())
 
 
+def test_cancelar_en_cursiva_unicode():
+    cursiva = "𝘊𝘢𝘯𝘤𝘦𝘭𝘢𝘳"
+    assert main._es_orden_cancelar(cursiva)
+
+    async def correr():
+        main.conversation_state.clear()
+        canal = _Canal()
+        main.conversation_state[str(canal.id)] = {
+            "tipo": "apagado_batidoras",
+            "user_id": 999,
+            "fase": "checklist",
+            "batidora": 1,
+        }
+        await main.on_message(_Msg(canal, 7, cursiva))
+        assert str(canal.id) not in main.conversation_state
+        assert any("cancelado" in m for m in canal.mensajes)
+
+    asyncio.run(correr())
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

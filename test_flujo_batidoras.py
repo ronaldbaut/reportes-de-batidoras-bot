@@ -649,6 +649,45 @@ def test_cierre_batidora_que_trabaja_pide_inicio_fin_y_batidas():
     asyncio.run(correr())
 
 
+def test_pausa_no_cuenta_como_inicio_ni_fin():
+    """Una pausa con dos horas no trae inicio, fin y batidas. El tramo completo sí."""
+    pausa = (
+        "Correas ajustadas / Chaveta esta bien / Dientes 1 partido / "
+        "Falta de engrase / Agua sal ( ojo esta máquina fue pausada a las 8:25 am "
+        "por fuga del agua sal fue reparada y encendida a las 10:10 am la cual "
+        "el tiempo de pausa fue por 1 hora y 45 minutos ...) / Protector y cuchilla arriba"
+    )
+    completas = (
+        "7:00 am encendida / 1:45 apagada / Tiempos de batidas / Normales 45 minutos"
+    )
+    assert main._respuesta_trae_horas_y_batidas(pausa) is False
+    assert main._respuesta_trae_horas_y_batidas(completas) is True
+    assert main._respuesta_trae_horas_y_batidas(CHECKLIST_OK) is True
+
+    async def correr():
+        main.consultar_grok = _grok(False)
+        main.conversation_state.clear()
+        canal = _Canal()
+        await main._iniciar(canal, _Usuario(), "apagado_batidoras")
+        antes = len(canal.mensajes)
+        await main.manejar_respuesta(_Msg(canal, pausa))
+        nuevos = canal.mensajes[antes:]
+        assert nuevos == [main.PREGUNTA_HORAS_BATIDA], nuevos
+        assert main.conversation_state[str(canal.id)]["fase"] == "horas_batida"
+
+        canal = _Canal()
+        main.conversation_state.clear()
+        await main._iniciar(canal, _Usuario(), "apagado_batidoras")
+        antes = len(canal.mensajes)
+        await main.manejar_respuesta(_Msg(canal, completas))
+        nuevos = canal.mensajes[antes:]
+        assert any("video del piñón" in m for m in nuevos), nuevos
+        assert main.PREGUNTA_HORAS_BATIDA not in nuevos
+        assert main.conversation_state[str(canal.id)]["fase"] == "video"
+
+    asyncio.run(correr())
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

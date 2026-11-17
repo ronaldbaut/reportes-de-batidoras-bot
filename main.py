@@ -1387,15 +1387,52 @@ def _texto_fuera_de_servicio(texto: str) -> bool:
 def _respuesta_trae_horas_y_batidas(texto: str) -> bool:
     """El checklist de apagado ya trae hora de inicio, hora de fin y tiempo de batida."""
     t = _norm_es(texto or "")
-    n_reloj = len(re.findall(r"\b\d{1,2}\s*[:.]\s*\d{1,2}\b", t))
-    tiene_tramo = bool(re.search(r"\bencend", t)) and bool(re.search(r"\bapag", t))
-    if n_reloj < 2 and not (tiene_tramo and n_reloj >= 1):
-        return False
-    return bool(
-        re.search(
-            r"\b(normal|gourmet|clasica|batipop|sundae|batida|batidas|tiempo|tiempos|minut)\b",
+    t = re.sub(r"\ba\s*\.?\s*m\.?\b|\bp\s*\.?\s*m\.?\b", " ", t)
+    relojes = list(re.finditer(r"\b\d{1,2}\s*[:.]\s*\d{1,2}\b", t))
+    palabras = list(
+        re.finditer(
+            r"\b(?:encend\w*|prend\w*|inicio\w*|empez\w*|arranc\w*"
+            r"|apag\w*|termin\w*|fin"
+            r"|paus\w*|paro|reparad\w*)\b",
             t,
         )
+    )
+
+    def _clase(palabra: str) -> str:
+        if re.match(r"(?:paus\w*|paro|reparad\w*)$", palabra):
+            return "pausa"
+        if re.match(r"(?:apag\w*|termin\w*|fin)$", palabra):
+            return "fin"
+        return "inicio"
+
+    tiene_inicio = False
+    tiene_fin = False
+    for rel in relojes:
+        mejor = None
+        for pal in palabras:
+            if pal.end() <= rel.start():
+                dist = rel.start() - pal.end()
+            elif pal.start() >= rel.end():
+                dist = pal.start() - rel.end()
+            else:
+                dist = 0
+            if dist > 24:
+                continue
+            clase = _clase(pal.group())
+            if mejor is None or dist < mejor[0]:
+                mejor = (dist, clase)
+        if mejor and mejor[1] == "inicio":
+            tiene_inicio = True
+        elif mejor and mejor[1] == "fin":
+            tiene_fin = True
+    if not (tiene_inicio and tiene_fin):
+        return False
+    if re.search(r"\bbatidas?\b", t):
+        return True
+    sabor = r"(?:normal|gourmet|clasica|batipop|sundae)\w*"
+    return bool(
+        re.search(rf"\b{sabor}\b.{{0,40}}\d+\s*minut", t)
+        or re.search(rf"\d+\s*minut\w*.{{0,40}}\b{sabor}\b", t)
     )
 
 
@@ -1418,7 +1455,10 @@ _RE_CANCELAR = re.compile(
 
 def _es_orden_cancelar(texto: str) -> bool:
     """Acepta cancelar, cancelar., **cancelar**, cancelar el reporte, cancela."""
-    t = _norm_es(texto or "")
+    import unicodedata
+
+    t = unicodedata.normalize("NFKC", texto or "")
+    t = _norm_es(t)
     t = t.replace("*", " ").replace("_", " ").replace("`", " ")
     t = re.sub(r"[^\w\s]", " ", t)
     t = re.sub(r"\s+", " ", t).strip()
